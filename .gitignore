@@ -1,0 +1,19 @@
+# 확장자 ignore
+*.txt
+*.jpg
+
+# 라이브러리 ignore
+__pycache__/
+
+cache/
+
+stable-diffusion-xl-base-1.0/
+
+loras/
+
+mgmg/
+
+# 파일 ignore
+test
+dl_AX.py
+dl_Karlo.py
