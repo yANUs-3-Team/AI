@@ -14,13 +14,15 @@ warnings.filterwarnings("ignore", message=".*dtype=torch.float16.*cpu.*")
 for name in ("diffusers", "transformers", "peft"):
     logging.getLogger(name).setLevel(logging.ERROR)
 
-from fastapi import FastAPI, HTTPException, asynccontextmanager, Form
+
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import uvicorn
 
-import story_engine as SM  # 너의 모듈
+import story_engine as SM 
 
 # ===== FastAPI =====
 app = FastAPI(title="Story Engine API", version="1.0.0")
@@ -81,7 +83,7 @@ async def lifespan(app: FastAPI):
     SM.init_models(gpu_text=gt, gpu_image=gi)
     print(f"[FastAPI] Startup complete. GPUs(text,image)=({gt},{gi})")
     
-    yield  # 여기까지가 startup, 아래부터 shutdown
+    yield  # 여기까지가 startup
 
     # shutdown 단계
     print("[FastAPI] Server shutting down...")
@@ -124,7 +126,7 @@ def state(session_id: str):
         raise HTTPException(status_code=404, detail=str(ve))
 
 # ---------- (옵션) Form 기반 엔드포인트 ----------
-# 프론트에서 <form-data>로 보낼 때 사용 (예: fetch로 FormData 전송)
+# 프론트에서 <form-data>로 보낼 때 사용 
 @app.post("/init_form", response_model=InitRes)
 def init_session_form(
     protagonist_name: str = Form(...),
@@ -166,7 +168,7 @@ def choose_form(
 
 # ---------- Uvicorn 실행부 (포트포워딩 친화) ----------
 if __name__ == "__main__":
-    # 환경변수로 호스트/포트 조절 가능 (예: HOST=0.0.0.0 PORT=8080)
+    # 환경변수로 호스트/포트 조절 가능 
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "8000"))
     # PROXY 환경(nginx, render, railway 등)에서 X-Forwarded-* 헤더 신뢰
