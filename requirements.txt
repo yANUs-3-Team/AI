@@ -1,0 +1,19 @@
+# MGMG-AI minimal requirements (derived from current code)
+# Tip: Install torch according to your CUDA version from https://pytorch.org/get-started/locally/
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.0
+
+transformers>=4.40
+diffusers>=0.27
+accelerate>=0.30
+safetensors>=0.4
+Pillow>=10.0
+
+# Needed for FastAPI Form(...) parsing (multipart/form-data)
+python-multipart>=0.0.9
+
+# Install CUDA-specific torch manually, e.g.:
+# pip install --index-url https://download.pytorch.org/whl/cu121 torch torchvision torchaudio
+# or CPU-only:
+# pip install torch torchvision torchaudio
