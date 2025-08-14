@@ -118,10 +118,10 @@ uvicorn app:app --reload
 **Request Body**
 ```json
 {
-  "name": "윈터",
-  "personality": "호기심 많음",
-  "era": "중세",
-  "genre": "판타지",
+  "name": "주인공",
+  "personality": "성경",
+  "era": "시대",
+  "genre": "장르",
   "ending_count": 3,
   "current_path": "page0"
 }
@@ -131,11 +131,11 @@ uvicorn app:app --reload
 ```json
 {
   "path": "page1",
-  "story": "윈터는 성 주변을 탐험하며...",
+  "story": "주인공은...",
   "choices": {
-    "page1-1": "비밀 통로로 들어간다.",
-    "page1-2": "그림을 자세히 살펴본다.",
-    "page1-3": "작은 동물을 따라간다.",
+    "page1-1": "선택지1",
+    "page1-2": "선택지2",
+    "page1-3": "선택지3",
     "page1-4": "(직접 입력)"
   }
 }
