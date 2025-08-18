@@ -1,3 +1,4 @@
+# 몽글몽글 상상나래 AI 최소 요구 패키지
 # MGMG-AI minimal requirements (derived from current code)
 # Tip: Install torch according to your CUDA version from https://pytorch.org/get-started/locally/
 fastapi>=0.110

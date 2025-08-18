@@ -119,7 +119,7 @@ uvicorn app:app --reload
 ```json
 {
   "name": "주인공",
-  "personality": "성경",
+  "personality": "성격",
   "era": "시대",
   "genre": "장르",
   "ending_count": 3,

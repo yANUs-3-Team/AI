@@ -1,0 +1,23 @@
+// .vscode/launch.json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Python: app.py",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/app.py",
+      "console": "integratedTerminal",
+      "env": {
+        "AI_EXTERNAL_BASE": "https://<ai>.ngrok-free.app",
+        "BE_INGEST_URL": "https://<be>.ngrok-free.app/be/ingest",
+        "BE_SHARED_SECRET": "my-secret",
+        "FRONTEND_ORIGINS": "http://localhost:3000,https://<fe>.ngrok-free.app",
+        "HOST": "0.0.0.0",
+        "PORT": "8000",
+        "RELOAD": "1"
+      },
+      "envFile": "${workspaceFolder}/.env"  // 있으면 함께 로드
+    }
+  ]
+}

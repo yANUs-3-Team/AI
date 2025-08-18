@@ -6,7 +6,7 @@ from typing import Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor
 import time
 
-from model_loader import get_text_model, get_image_pipe
+from AI.model_loader import get_text_model, get_image_pipe
 
 # 전역(싱글톤)
 TOK = None
@@ -19,6 +19,9 @@ SESSIONS: Dict[str, Dict[str, Any]] = {}
 
 STATIC_ROOT = os.path.abspath("static")
 os.makedirs(STATIC_ROOT, exist_ok=True)
+
+TEXT_DEVICE: Optional[str] = None
+IMAGE_DEVICE: Optional[str] = None
 
 
 # ---------- 유틸 ----------
@@ -71,12 +74,16 @@ def generate_and_save_image(pipe, prompt: str, filename: str, seed: Optional[int
         H, W, steps, guidance = 1024, 1024, 28, 5.0
     else:  # "quality"
         H, W, steps, guidance = 1152, 1152, 32, 5.5
+        
+    exec_device = IMAGE_DEVICE or "cpu"
+    _ensure_pipe_device(pipe, exec_device)
 
     gen = None
     if seed is not None:
-        gen = torch.Generator(device=pipe.device).manual_seed(int(seed))
+        gen = torch.Generator(device=pipe.exec_device).manual_seed(int(seed))
 
     d = os.path.dirname(filename)
+
     if d: os.makedirs(d, exist_ok=True)
     with torch.inference_mode():
         image = pipe(
@@ -87,6 +94,7 @@ def generate_and_save_image(pipe, prompt: str, filename: str, seed: Optional[int
             generator=gen
         ).images[0]
     image.save(filename)
+    
     if offload_after:
         try:
             pipe.to("cpu"); torch.cuda.empty_cache()
@@ -102,22 +110,70 @@ def make_img_async(pipe, prompt, path):
     except Exception as e:
         print(f"[이미지 생성 실패: {e}]")
 
+def _normalize_device(dev: Optional[str]) -> str:
+    """'cuda:0' / 'cpu' 형태로 정규화 + 가드"""
+    if dev is None:
+        return "cpu"
+    dev = str(dev)
+    if dev.startswith("cuda"):
+        if not torch.cuda.is_available():
+            print(f"[Device] CUDA not available → fallback to CPU (requested={dev})")
+            return "cpu"
+        if dev == "cuda":
+            dev = "cuda:0"
+        try:
+            idx = int(dev.split(":")[1])
+        except Exception:
+            idx = 0
+            dev = f"cuda:{idx}"
+        if idx >= torch.cuda.device_count():
+            print(f"[Device] Invalid CUDA index {idx} → fallback to cuda:0")
+            dev = "cuda:0"
+    return dev
+
+def _get_tensor_device(model: torch.nn.Module) -> str:
+    try:
+        return str(next(model.parameters()).device)
+    except StopIteration:
+        return "cpu"
+
+def _ensure_model_device(model: torch.nn.Module, target: str) -> None:
+    cur = _get_tensor_device(model)
+    if cur != target:
+        model.to(target)
+
+def _ensure_pipe_device(pipe, target: str) -> None:
+    """
+    diffusers 파이프라인의 실행 디바이스를 필요할 때만 전환.
+    """
+    try:
+        exec_dev = getattr(pipe, "_execution_device", None)
+        if exec_dev is not None and str(exec_dev) == target:
+            return
+    except Exception:
+        pass
+    pipe.to(target)
+    try:
+        pipe._execution_device = torch.device(target)  # 힌트(가능한 경우)
+    except Exception:
+        pass
+
 
 # ---------- 프롬프트 ----------
 def build_system_prompt(st: Dict[str, Any]) -> str:
     return (
-        f"너는 {st['genre']} 장르의 동화를 쓰는 작가야. 이야기는 {st['era']} 시대의 {st['start_location']}에서 시작되며, "
-        f"주인공은 {st['protagonist_characteristic']} {st['protagonist_appearance']}인 '{st['protagonist_name']}'이야. "
+        f"너는 {st['genre']} 장르의 동화를 쓰는 작가야. 이야기는 {st['era']} 시대의 {st['location']}에서 시작되며, "
+        f"주인공은 {st['characteristics']} {st['personality']}인 '{st['name']}'이야. "
         f"각 분기마다 사용자 선택에 따라 3개의 선택지를 제공하고, 마지막 1개는 사용자 입력용 고정 문구로 구성해줘. "
         f"이야기는 총 {st['ENDING_POINT']}장인 이야기이고 {st['ENDING_POINT']}페이지에 잘 끝나도록 이야기 길이를 조절해줘. "
-        f"image_prompt에는 주인공 {st['protagonist_name']}의 {st['protagonist_appearance']}가 잘 묘사되어야 하고 반드시 image_prompt만 영어로 작성해야 해, "
-        f"나머지 텍스트는 한국어로 작성하고, 배경인 {st['start_location']}, 시대 {st['era']}, 장르 {st['genre']}의 분위기도 잘 표현해야 해. "
+        f"image_prompt에는 주인공 {st['name']}의 {st['personality']}가 잘 묘사되어야 하고 반드시 image_prompt만 영어로 작성해야 해, "
+        f"나머지 텍스트는 한국어로 작성하고, 배경인 {st['location']}, 시대 {st['era']}, 장르 {st['genre']}의 분위기도 잘 표현해야 해. "
         "형식은 다음 JSON 스키마를 따라야 해:\n"
         "{\n"
         '  "story": "...",\n'
         '  "image_prompt": "...",\n'
         '  "scene_tags": ["...", "..."],\n'
-        '  "character_state": {"emotion": "...", "action": "...", "location": "..."},\n'
+        '  "character_state": {"emotion": "...", "action": "...", "place": "..."},\n'
         '  "choices": {\n'
         '    "pageN1": "...",\n'
         '    "pageN2": "...",\n'
@@ -130,13 +186,37 @@ def build_system_prompt(st: Dict[str, Any]) -> str:
 
 # ---------- 모델/파이프 로딩 ----------
 def init_models(gpu_text: Optional[int]=0, gpu_image: Optional[int]=1):
-    global TOK, LLM, PIPE, _INIT_DONE
+    # global TOK, LLM, PIPE, _INIT_DONE
+    # if _INIT_DONE:
+    #     print("[Init] Already initialized; skip.")
+    #     return
+
+    # text_dev = f"cuda:{gpu_text}" if gpu_text is not None else "cpu"
+    # img_dev  = f"cuda:{gpu_image}" if gpu_image is not None else (text_dev if gpu_text is not None else "cpu")
+
+    # with _INIT_LOCK:
+    #     if _INIT_DONE:
+    #         return
+    #     t0 = time.time()
+
+    #     # 병렬 로딩
+    #     with ThreadPoolExecutor(max_workers=2) as ex:
+    #         fut_txt = ex.submit(get_text_model, device=text_dev)   # ax_dir은 기본값("cache/AX") 사용
+    #         fut_img = ex.submit(get_image_pipe, device=img_dev)    # base_model은 기본값 사용   
+    #         TOK, LLM = fut_txt.result()
+    #         PIPE     = fut_img.result()
+
+    #     _INIT_DONE = True
+    #     print(f"[StoryModel] Models ready. text_dev={text_dev}, img_dev={img_dev} ({time.time()-t0:.1f}s)")
+    global TOK, LLM, PIPE, _INIT_DONE, TEXT_DEVICE, IMAGE_DEVICE
     if _INIT_DONE:
         print("[Init] Already initialized; skip.")
         return
 
-    text_dev = f"cuda:{gpu_text}" if gpu_text is not None else "cpu"
-    img_dev  = f"cuda:{gpu_image}" if gpu_image is not None else (text_dev if gpu_text is not None else "cpu")
+    # 정규화된 디바이스 문자열 만들기
+    text_dev = _normalize_device(f"cuda:{gpu_text}" if gpu_text is not None else "cpu")
+    # 이미지가 None이면 텍스트와 동일 장치
+    img_dev  = _normalize_device(f"cuda:{gpu_image}" if gpu_image is not None else text_dev)
 
     with _INIT_LOCK:
         if _INIT_DONE:
@@ -145,13 +225,26 @@ def init_models(gpu_text: Optional[int]=0, gpu_image: Optional[int]=1):
 
         # 병렬 로딩
         with ThreadPoolExecutor(max_workers=2) as ex:
-            fut_txt = ex.submit(get_text_model, text_dev)      
-            fut_img = ex.submit(get_image_pipe, img_dev)       
+            fut_txt = ex.submit(get_text_model, device=text_dev)
+            fut_img = ex.submit(get_image_pipe, device=img_dev)
             TOK, LLM = fut_txt.result()
             PIPE     = fut_img.result()
 
+        # 실제 올라간 장치 기록 및 강제 보정
+        try:
+            TEXT_DEVICE = _get_tensor_device(LLM)
+        except Exception:
+            TEXT_DEVICE = text_dev
+
+        try:
+            IMAGE_DEVICE = img_dev
+            _ensure_pipe_device(PIPE, IMAGE_DEVICE)  # 실행장치 확정
+        except Exception:
+            IMAGE_DEVICE = "cpu"
+
         _INIT_DONE = True
-        print(f"[StoryModel] Models ready. text_dev={text_dev}, img_dev={img_dev} ({time.time()-t0:.1f}s)")
+        print(f"[StoryModel] Models ready. text_dev={TEXT_DEVICE}, img_dev={IMAGE_DEVICE} ({time.time()-t0:.1f}s)")
+
 
 # ---------- 생성 로직 ----------
 def build_recent_context(st, max_chars=800):
@@ -174,8 +267,8 @@ def _generate_branch(st: Dict[str, Any], branch_prefix: str, selected_choice: st
 
     if branch_prefix == "page0":
         user_prompt = (
-            f"'{st['protagonist_characteristic']}하고 {st['protagonist_appearance']}'인 "
-            f"'{st['protagonist_name']}'이 어떻게 이 모험을 시작하게 되었는지 중심으로 "
+            f"'{st['characteristics']}하고 {st['personality']}'인 "
+            f"'{st['name']}'이 어떻게 이 모험을 시작하게 되었는지 중심으로 "
             f'"{branch_prefix}"(프롤로그)를 작성해줘. '
             "image_prompt만 반드시 영어로 작성해. "
             "응답은 반드시 순수 JSON 형식으로만 작성하고, 주석/설명/마크다운은 절대 금지. "
@@ -184,7 +277,7 @@ def _generate_branch(st: Dict[str, Any], branch_prefix: str, selected_choice: st
             '  "story": "<서술적 이야기(한국어)>",\n'
             '  "image_prompt": "<Describe this scene in ENGLISH for image generation>",\n'
             '  "scene_tags": ["...", "..."],\n'
-            '  "character_state": {"emotion": "...", "action": "...", "location": "..."},\n'
+            '  "character_state": {"emotion": "...", "action": "...", "place": "..."},\n'
             '  "choices": {\n'
             f'    "{branch_prefix}-1": "행동 선택지 1",\n'
             f'    "{branch_prefix}-2": "행동 선택지 2",\n'
@@ -208,7 +301,7 @@ def _generate_branch(st: Dict[str, Any], branch_prefix: str, selected_choice: st
             '  "story": "<서술적 이야기>",\n'
             '  "image_prompt": "<Describe this scene in ENGLISH for image generation>",\n'
             '  "scene_tags": ["...", "..."],\n'
-            '  "character_state": {"emotion": "...", "action": "...", "location": "..."},\n'
+            '  "character_state": {"emotion": "...", "action": "...", "place": "..."},\n'
             '  "choices": {\n'
             f'    "{branch_prefix}-1": "행동 선택지 1",\n'
             f'    "{branch_prefix}-2": "행동 선택지 2",\n'
@@ -292,21 +385,21 @@ def _generate_branch(st: Dict[str, Any], branch_prefix: str, selected_choice: st
 
 def _generate_ending(st: Dict[str, Any]) -> Dict[str, Any]:
     system_prompt = st["system_prompt"]
-    protagonist_name = st["protagonist_name"]
+    name = st["name"]
     summary = "\n".join(
         (ch.get("ai_story") or {}).get("story", "")
         for ch in st["chapters"] if isinstance(ch.get("ai_story"), dict)
     )
     user_prompt = (
         f"지금까지의 이야기 흐름 요약:\n\"{summary}\"\n\n"
-        f"이제 '{protagonist_name}'의 모험을 마무리하는 엔딩 장면을 작성해줘. "
+        f"이제 '{name}'의 모험을 마무리하는 엔딩 장면을 작성해줘. "
         "감정적 여운이 남도록 서술적이며 명확한 결말로 완결짓고, 선택지는 포함하지 마. "
         "출력은 오직 JSON. 마크다운/설명 금지.\n"
         "{\n"
         '  "story": "<엔딩 내용(한국어)>",\n'
         '  "image_prompt": "<Describe this ending scene in ENGLISH>",\n'
         '  "scene_tags": ["...", "..."],\n'
-        '  "character_state": {"emotion": "...", "action": "...", "location": "..."},\n'
+        '  "character_state": {"emotion": "...", "action": "...", "place": "..."},\n'
         '  "choices": null\n'
         "}"
     )
@@ -342,7 +435,7 @@ def _generate_ending(st: Dict[str, Any]) -> Dict[str, Any]:
         repair_msg = (
             "앞선 출력이 형식을 어겼습니다. 오직 JSON만 다시 출력하세요. "
             '형식: {"story":"...","image_prompt":"...","scene_tags":["..."],'
-            '"character_state":{"emotion":"...","action":"...","location":"..."},"choices":null}'
+            '"character_state":{"emotion":"...","action":"...","place":"..."},"choices":null}'
         )
         msgs += [
             {"role": "assistant", "content": reply},
@@ -384,18 +477,18 @@ def _generate_ending(st: Dict[str, Any]) -> Dict[str, Any]:
 def create_session(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     payload: {
-      protagonist_name, protagonist_appearance, protagonist_characteristic,
-      start_location, era, genre, ENDING_POINT
+      name, personality, characteristics,
+      location, era, genre, ENDING_POINT
     }
     """
     import uuid
     session_id = uuid.uuid4().hex
     st = {
         "session_id": session_id,
-        "protagonist_name": payload["protagonist_name"],
-        "protagonist_appearance": payload["protagonist_appearance"],
-        "protagonist_characteristic": payload["protagonist_characteristic"],
-        "start_location": payload["start_location"],
+        "name": payload["name"],
+        "personality": payload["personality"],
+        "characteristics": payload["characteristics"],
+        "location": payload["location"],
         "era": payload["era"],
         "genre": payload["genre"],
         "ENDING_POINT": int(payload["ENDING_POINT"]),

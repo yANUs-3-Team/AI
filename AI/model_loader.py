@@ -1,6 +1,6 @@
 # model_loader.py
-import os
-import torch
+
+import os,torch
 from functools import lru_cache
 from typing import Tuple, Optional
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -10,19 +10,45 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.float16 if DEVICE == "cuda" else torch.float32
 
 @lru_cache(maxsize=1)
+# def get_text_model(ax_dir: str = "cache/AX", device: Optional[str] = None):
+#     tok = AutoTokenizer.from_pretrained(ax_dir, use_fast=True)
+#     model = AutoModelForCausalLM.from_pretrained(ax_dir, torch_dtype=DTYPE)  # device_map 제거
+#     model.to(device or ("cuda:0" if DEVICE == "cuda" else "cpu"))
+#     model.eval()
+#     if tok.pad_token_id is None:
+#         tok.pad_token = tok.eos_token
+#     tok.padding_side = "left"
+#     if getattr(model, "generation_config", None) is not None:
+#         model.generation_config.pad_token_id = tok.pad_token_id
+#         model.generation_config.eos_token_id = tok.eos_token_id
+#     return tok, model
 def get_text_model(ax_dir: str = "cache/AX", device: Optional[str] = None):
     tok = AutoTokenizer.from_pretrained(ax_dir, use_fast=True)
-    model = AutoModelForCausalLM.from_pretrained(ax_dir, torch_dtype=DTYPE)  # device_map 제거
-    model.to(device or ("cuda:0" if DEVICE == "cuda" else "cpu"))
+
+    target_device = device or ("cuda:0" if DEVICE == "cuda" else "cpu")
+    load_dtype = DTYPE
+    if str(target_device).startswith("cpu"):
+        load_dtype = torch.float32  # CPU에선 half 금지
+
+    # ✅ 처음부터 target_device로 로드 (meta 경로 회피)
+    #  - device_map={"": target_device} : 모든 모듈을 지정 디바이스에 배치
+    #  - low_cpu_mem_usage=False : meta 텐서 경로 사용 금지
+    model = AutoModelForCausalLM.from_pretrained(
+        ax_dir,
+        torch_dtype=load_dtype,
+        device_map={"": target_device},
+        low_cpu_mem_usage=False,
+    )
     model.eval()
+
     if tok.pad_token_id is None:
         tok.pad_token = tok.eos_token
     tok.padding_side = "left"
     if getattr(model, "generation_config", None) is not None:
         model.generation_config.pad_token_id = tok.pad_token_id
         model.generation_config.eos_token_id = tok.eos_token_id
-    return tok, model
 
+    return tok, model
 def _safe_load_lora(pipe: StableDiffusionXLPipeline, path: str, adapter_name: str) -> None:
     if os.path.exists(path):
         pipe.load_lora_weights(path, adapter_name=adapter_name)
