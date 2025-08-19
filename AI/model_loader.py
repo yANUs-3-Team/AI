@@ -177,7 +177,7 @@ def get_image_pipe(base_model: str = "./stable-diffusion-xl-base-1.0", device: O
         load_kwargs["low_cpu_mem_usage"] = False
 
     print("[DEBUG] load_kwargs =", load_kwargs)
-    
+
     pipe = StableDiffusionXLPipeline.from_pretrained(
     base_model,
     torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
