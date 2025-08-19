@@ -1,4 +1,4 @@
-# story_model.py
+# story_engine.py
 
 import os, json, torch
 from threading import Thread, Lock
@@ -16,6 +16,9 @@ _INIT_DONE = False
 _INIT_LOCK = Lock()
 IMAGE_LOCK = Lock()
 SESSIONS: Dict[str, Dict[str, Any]] = {}
+_IMAGE_LAZY = True  # --------------------------------------추가
+_TEXT_FIRST = True  # --------------------------------------추가
+
 
 STATIC_ROOT = os.path.abspath("static")
 os.makedirs(STATIC_ROOT, exist_ok=True)
@@ -65,6 +68,20 @@ def ensure_choices(sd, branch_prefix):
         and all(k in sd["choices"] for k in must)
     )
 
+def ensure_image_pipe() -> Any:
+    #이미지 파이프라인이 없으면 지금 로드하고, 실행 디바이스도 보정.
+    global PIPE
+    if PIPE is None:
+        with IMAGE_LOCK:
+            if PIPE is None:  # 더블체크
+                print("[Image] Lazy loading SDXL pipeline...")
+                PIPE = get_image_pipe(device=IMAGE_DEVICE or "cpu")
+                try:
+                    _ensure_pipe_device(PIPE, IMAGE_DEVICE or "cpu")
+                except Exception:
+                    pass
+    return PIPE
+
 def generate_and_save_image(pipe, prompt: str, filename: str, seed: Optional[int]=None,
                             size: str="fast", offload_after=False):
     # 프리셋
@@ -80,7 +97,7 @@ def generate_and_save_image(pipe, prompt: str, filename: str, seed: Optional[int
 
     gen = None
     if seed is not None:
-        gen = torch.Generator(device=pipe.exec_device).manual_seed(int(seed))
+        gen = torch.Generator(device=exec_device).manual_seed(int(seed))
 
     d = os.path.dirname(filename)
 
@@ -94,7 +111,7 @@ def generate_and_save_image(pipe, prompt: str, filename: str, seed: Optional[int
             generator=gen
         ).images[0]
     image.save(filename)
-    
+
     if offload_after:
         try:
             pipe.to("cpu"); torch.cuda.empty_cache()
@@ -102,10 +119,19 @@ def generate_and_save_image(pipe, prompt: str, filename: str, seed: Optional[int
     return pipe
 
 
+# def make_img_async(pipe, prompt, path):
+#     try:
+#         with IMAGE_LOCK:
+#             generate_and_save_image(pipe, prompt, path, offload_after=False)
+#         print(f"[이미지 완료: {path}]")
+#     except Exception as e:
+#         print(f"[이미지 생성 실패: {e}]")
 def make_img_async(pipe, prompt, path):
     try:
         with IMAGE_LOCK:
-            generate_and_save_image(pipe, prompt, path, offload_after=False)
+            real_pipe = ensure_image_pipe()  # ← lazy 로드 보장
+            offload = (torch.cuda.device_count() == 1)  # 단일 GPU면 생성 후 내리자
+            generate_and_save_image(real_pipe, prompt, path, offload_after=offload)
         print(f"[이미지 완료: {path}]")
     except Exception as e:
         print(f"[이미지 생성 실패: {e}]")
@@ -185,37 +211,50 @@ def build_system_prompt(st: Dict[str, Any]) -> str:
     )
 
 # ---------- 모델/파이프 로딩 ----------
+# def init_models(gpu_text: Optional[int]=0, gpu_image: Optional[int]=1):
+#     global TOK, LLM, PIPE, _INIT_DONE, TEXT_DEVICE, IMAGE_DEVICE
+#     if _INIT_DONE:
+#         print("[Init] Already initialized; skip.")
+#         return
+
+#     # 정규화된 디바이스 문자열 만들기
+#     text_dev = _normalize_device(f"cuda:{gpu_text}" if gpu_text is not None else "cpu")
+#     # 이미지가 None이면 텍스트와 동일 장치
+#     img_dev  = _normalize_device(f"cuda:{gpu_image}" if gpu_image is not None else text_dev)
+
+#     with _INIT_LOCK:
+#         if _INIT_DONE:
+#             return
+#         t0 = time.time()
+
+#         # 병렬 로딩
+#         with ThreadPoolExecutor(max_workers=2) as ex:
+#             fut_txt = ex.submit(get_text_model, device=text_dev)
+#             fut_img = ex.submit(get_image_pipe, device=img_dev)
+#             TOK, LLM = fut_txt.result()
+#             PIPE     = fut_img.result()
+
+#         # 실제 올라간 장치 기록 및 강제 보정
+#         try:
+#             TEXT_DEVICE = _get_tensor_device(LLM)
+#         except Exception:
+#             TEXT_DEVICE = text_dev
+
+#         try:
+#             IMAGE_DEVICE = img_dev
+#             _ensure_pipe_device(PIPE, IMAGE_DEVICE)  # 실행장치 확정
+#         except Exception:
+#             IMAGE_DEVICE = "cpu"
+
+#         _INIT_DONE = True
+#         print(f"[StoryModel] Models ready. text_dev={TEXT_DEVICE}, img_dev={IMAGE_DEVICE} ({time.time()-t0:.1f}s)")
 def init_models(gpu_text: Optional[int]=0, gpu_image: Optional[int]=1):
-    # global TOK, LLM, PIPE, _INIT_DONE
-    # if _INIT_DONE:
-    #     print("[Init] Already initialized; skip.")
-    #     return
-
-    # text_dev = f"cuda:{gpu_text}" if gpu_text is not None else "cpu"
-    # img_dev  = f"cuda:{gpu_image}" if gpu_image is not None else (text_dev if gpu_text is not None else "cpu")
-
-    # with _INIT_LOCK:
-    #     if _INIT_DONE:
-    #         return
-    #     t0 = time.time()
-
-    #     # 병렬 로딩
-    #     with ThreadPoolExecutor(max_workers=2) as ex:
-    #         fut_txt = ex.submit(get_text_model, device=text_dev)   # ax_dir은 기본값("cache/AX") 사용
-    #         fut_img = ex.submit(get_image_pipe, device=img_dev)    # base_model은 기본값 사용   
-    #         TOK, LLM = fut_txt.result()
-    #         PIPE     = fut_img.result()
-
-    #     _INIT_DONE = True
-    #     print(f"[StoryModel] Models ready. text_dev={text_dev}, img_dev={img_dev} ({time.time()-t0:.1f}s)")
     global TOK, LLM, PIPE, _INIT_DONE, TEXT_DEVICE, IMAGE_DEVICE
     if _INIT_DONE:
         print("[Init] Already initialized; skip.")
         return
 
-    # 정규화된 디바이스 문자열 만들기
     text_dev = _normalize_device(f"cuda:{gpu_text}" if gpu_text is not None else "cpu")
-    # 이미지가 None이면 텍스트와 동일 장치
     img_dev  = _normalize_device(f"cuda:{gpu_image}" if gpu_image is not None else text_dev)
 
     with _INIT_LOCK:
@@ -223,27 +262,26 @@ def init_models(gpu_text: Optional[int]=0, gpu_image: Optional[int]=1):
             return
         t0 = time.time()
 
-        # 병렬 로딩
-        with ThreadPoolExecutor(max_workers=2) as ex:
-            fut_txt = ex.submit(get_text_model, device=text_dev)
-            fut_img = ex.submit(get_image_pipe, device=img_dev)
-            TOK, LLM = fut_txt.result()
-            PIPE     = fut_img.result()
+        # --- 변경: 텍스트 먼저 로드 ---
+        TOK, LLM = get_text_model(device=text_dev)
 
-        # 실제 올라간 장치 기록 및 강제 보정
+        # --- 이미지 파이프라인: lazy면 지금은 로드하지 않음 ---
+        if _IMAGE_LAZY:
+            PIPE = None
+        else:
+            PIPE = get_image_pipe(device=img_dev)
+
+        # 실제 올라간 장치 기록
         try:
             TEXT_DEVICE = _get_tensor_device(LLM)
         except Exception:
             TEXT_DEVICE = text_dev
 
-        try:
-            IMAGE_DEVICE = img_dev
-            _ensure_pipe_device(PIPE, IMAGE_DEVICE)  # 실행장치 확정
-        except Exception:
-            IMAGE_DEVICE = "cpu"
+        IMAGE_DEVICE = img_dev  # 원하는 실행 대상 기록 (실 로딩 시 적용)
 
         _INIT_DONE = True
-        print(f"[StoryModel] Models ready. text_dev={TEXT_DEVICE}, img_dev={IMAGE_DEVICE} ({time.time()-t0:.1f}s)")
+        print(f"[StoryModel] Models ready. text_dev={TEXT_DEVICE}, "
+              f"img_dev={'(lazy)' if PIPE is None else IMAGE_DEVICE} ({time.time()-t0:.1f}s)")
 
 
 # ---------- 생성 로직 ----------
@@ -475,12 +513,11 @@ def _generate_ending(st: Dict[str, Any]) -> Dict[str, Any]:
 
 # ---------- 외부로 노출할 API ----------
 def create_session(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    payload: {
-      name, personality, characteristics,
-      location, era, genre, ENDING_POINT
-    }
-    """
+    # payload: {
+    #   name, personality, characteristics,
+    #   location, era, genre, ENDING_POINT
+    # }
+   
     import uuid
     session_id = uuid.uuid4().hex
     st = {
@@ -509,9 +546,12 @@ def create_session(payload: Dict[str, Any]) -> Dict[str, Any]:
     img_path = os.path.join(img_dir, "page0.png")
     img_url = None
     prompt = (page or {}).get("image_prompt", "")
+    # if isinstance(page, dict) and "error" not in page and prompt:
+    #     img_url = f"/static/{session_id}/page0.png"
+    #     Thread(target=make_img_async, args=(PIPE, prompt, img_path), daemon=True).start()
     if isinstance(page, dict) and "error" not in page and prompt:
         img_url = f"/static/{session_id}/page0.png"
-        Thread(target=make_img_async, args=(PIPE, prompt, img_path), daemon=True).start()
+        Thread(target=make_img_async, args=(None, prompt, img_path), daemon=True).start()
 
     return {
         "session_id": session_id,
@@ -557,7 +597,7 @@ def choose(session_id: str, choice: int, custom_text: Optional[str] = None) -> D
             os.makedirs(img_dir, exist_ok=True)
             img_path = os.path.join(img_dir, f"{branch_prefix}.end.png")
             img_url = f"/static/{st['session_id']}/{branch_prefix}.end.png"
-            Thread(target=make_img_async, args=(PIPE, prompt, img_path), daemon=True).start()
+            Thread(target=make_img_async, args=(None, prompt, img_path), daemon=True).start()
         return {"finished": True, "page_index": st["current_index"], "page": end_page, "image_url": img_url}
 
     # 다음 분기 생성
@@ -571,7 +611,7 @@ def choose(session_id: str, choice: int, custom_text: Optional[str] = None) -> D
         os.makedirs(img_dir, exist_ok=True)
         img_path = os.path.join(img_dir, f"{branch_prefix}.png")
         img_url = f"/static/{st['session_id']}/{branch_prefix}.png"
-        Thread(target=make_img_async, args=(PIPE, prompt, img_path), daemon=True).start()
+        Thread(target=make_img_async, args=(None, prompt, img_path), daemon=True).start()
 
     return {"finished": False, "page_index": st["current_index"], "page": page, "image_url": img_url}
 
