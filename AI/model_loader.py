@@ -11,25 +11,9 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE  = torch.float16 if DEVICE == "cuda" else torch.float32
 
 @lru_cache(maxsize=1)
-#-------------------- v2---------------------
-# def get_text_model(ax_dir: str = "cache/AX", device: Optional[str] = None):
-#     tok = AutoTokenizer.from_pretrained(ax_dir, use_fast=True)
-
-#     target_device = device or ("cuda:0" if DEVICE == "cuda" else "cpu")
-#     load_dtype = DTYPE
-#     if str(target_device).startswith("cpu"):
-#         load_dtype = torch.float32  # CPU에선 half 금지
-
-#     model = AutoModelForCausalLM.from_pretrained(
-#         ax_dir,
-#         torch_dtype=load_dtype,
-#         device_map={"": target_device},
-#         low_cpu_mem_usage=False,
-#     )
-#     model.eval()
 #-------------------- v3---------------------
 
-def get_text_model(ax_dir: str = "cache/AX", device: Optional[str] = None):
+def get_text_model(ax_dir: str = "cache/AX4.0", device: Optional[str] = None):
     tok = AutoTokenizer.from_pretrained(ax_dir, use_fast=True)
 
     target_device = device or ("cuda:0" if DEVICE == "cuda" else "cpu")
@@ -57,6 +41,7 @@ def get_text_model(ax_dir: str = "cache/AX", device: Optional[str] = None):
 
     model.eval()
 
+    # 안정성 체크
     for n, p in model.named_parameters():
         if getattr(p, "device", None) and p.device.type == "meta":
             raise RuntimeError(f"Meta tensor remains: {n}")
@@ -78,84 +63,7 @@ def _safe_load_lora(pipe: StableDiffusionXLPipeline, path: str, adapter_name: st
         print(f"[model_loader] LoRA not found: {path} (skip)")
 
 @lru_cache(maxsize=1)
-#--------------------------------v1-----------------------------------
-# def get_image_pipe(base_model: str = "./stable-diffusion-xl-base-1.0", device: Optional[str] = None):
-#     pipe = StableDiffusionXLPipeline.from_pretrained(
-#         base_model, torch_dtype=DTYPE, use_safetensors=True
-#     )
-#     pipe = pipe.to(device or ("cuda:0" if DEVICE == "cuda" else "cpu"))  # ← 이 줄만 남기기
 
-#     _safe_load_lora(pipe, "loras/StorybookRedmondV2-KidsBook-KidsRedmAF.safetensors", "illu")
-#     _safe_load_lora(pipe, "loras/J_oil_pastels_XL.safetensors", "fantasy")
-#     try:
-#         pipe.set_adapters(["illu", "fantasy"], adapter_weights=[0.1, 0.8])
-#     except Exception:
-#         pass
-
-#     try:
-#         pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config, use_karras=True)
-#     except Exception:
-#         pass
-
-#     try:
-#         if DEVICE == "cuda":
-#             pipe.enable_xformers_memory_efficient_attention()
-#         pipe.enable_vae_slicing()
-#         pipe.enable_vae_tiling()
-#     except Exception:
-#         pass
-
-#     pipe.set_progress_bar_config(disable=True)
-#     return pipe
-#--------------------------------v2-----------------------------------
-# def get_image_pipe(base_model: str = "./stable-diffusion-xl-base-1.0", device: Optional[str] = None):
-#     target = device or ("cuda:0" if DEVICE == "cuda" else "cpu")
-#     use_fp16 = str(target).startswith("cuda")
-#     dtype = torch.float16 if use_fp16 else torch.float32
-
-#     # ✅ meta 경로 회피: low_cpu_mem_usage=False
-#     # ✅ fp16 체크포인트일 경우 variant="fp16" 명시 (SDXL 배포본에 종종 필요)
-#     load_kwargs = dict(
-#         torch_dtype=dtype,
-#         use_safetensors=True,
-#         low_cpu_mem_usage=False,            # 핵심
-#     )
-#     if use_fp16:
-#         try:
-#             pipe = StableDiffusionXLPipeline.from_pretrained(base_model, variant="fp16", **load_kwargs)
-#         except Exception:
-#             pass
-
-#     pipe = StableDiffusionXLPipeline.from_pretrained(base_model, **load_kwargs)
-
-#     # ✅ 필요할 때만 to() (메타가 아니므로 안전)
-#     if str(getattr(pipe, "_execution_device", "")) != str(target):
-#         pipe = pipe.to(target)
-
-#     # ---- 이하 기존 설정 유지 ----
-#     _safe_load_lora(pipe, "loras/StorybookRedmondV2-KidsBook-KidsRedmAF.safetensors", "illu")
-#     _safe_load_lora(pipe, "loras/J_oil_pastels_XL.safetensors", "fantasy")
-#     try:
-#         pipe.set_adapters(["illu", "fantasy"], adapter_weights=[0.1, 0.8])
-#     except Exception:
-#         pass
-
-#     try:
-#         pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config, use_karras=True)
-#     except Exception:
-#         pass
-
-#     try:
-#         if DEVICE == "cuda":
-#             pipe.enable_xformers_memory_efficient_attention()
-#         pipe.enable_vae_slicing()
-#         pipe.enable_vae_tiling()
-#     except Exception:
-#         pass
-
-#     pipe.set_progress_bar_config(disable=True)
-#     return pipe
-#--------------------------------v3-----------------------------------
 def get_image_pipe(base_model: str = "./stable-diffusion-xl-base-1.0", device: Optional[str] = None):
     target = device or ("cuda:0" if DEVICE == "cuda" else "cpu")
     use_fp16 = str(target).startswith("cuda") and torch.cuda.is_available()
@@ -165,28 +73,20 @@ def get_image_pipe(base_model: str = "./stable-diffusion-xl-base-1.0", device: O
     load_kwargs = dict(
         torch_dtype=dtype,
         use_safetensors=True,
-        local_files_only=is_local,   # 로컬 폴더면 네트워크 금지
+        local_files_only=is_local,
     )
 
     if use_fp16:
-        # diffusers 0.34.x: 'auto' 말고 'balanced' 사용
         load_kwargs["device_map"] = "balanced"
-        load_kwargs["low_cpu_mem_usage"] = True   # ★ 필수 (balanced일 때)
+        load_kwargs["low_cpu_mem_usage"] = True
+        try:
+            pipe = StableDiffusionXLPipeline.from_pretrained(base_model, variant="fp16", **load_kwargs)
+        except Exception:
+            pipe = StableDiffusionXLPipeline.from_pretrained(base_model, **load_kwargs)
     else:
-        # CPU 로드에선 메타 경로 피하려면 False가 안전
         load_kwargs["low_cpu_mem_usage"] = False
+        pipe = StableDiffusionXLPipeline.from_pretrained(base_model, **load_kwargs)
 
-    print("[DEBUG] load_kwargs =", load_kwargs)
-
-    pipe = StableDiffusionXLPipeline.from_pretrained(
-    base_model,
-    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-    device_map=None,   # auto 대신 None
-    low_cpu_mem_usage=False
-    )
-    pipe.to("cuda" if torch.cuda.is_available() else "cpu")
-
-    # device_map 분산 로딩 시에는 .to(...) 금지. 힌트만 남겨둠
     try:
         pipe._execution_device = torch.device(target)
     except Exception:
@@ -200,7 +100,6 @@ def get_image_pipe(base_model: str = "./stable-diffusion-xl-base-1.0", device: O
     except: pass
     try:
         if DEVICE == "cuda":
-            # xformers 없어도 try/except라서 괜찮음 (경고만)
             pipe.enable_xformers_memory_efficient_attention()
         pipe.enable_vae_slicing()
         pipe.enable_vae_tiling()

@@ -1,4 +1,4 @@
-# test_app.py
+# app.py
 # -------------------------------------------------
 import os, logging, warnings, torch
 
@@ -65,8 +65,8 @@ class SessionCreateOut(BaseModel):
     image_url: Optional[str] = None
 
 class ChooseIn(BaseModel):
-    choice_id: int = Field(ge=1, le=4)
-    text: Optional[str] = None
+    choice_id: str
+    session_id: Optional[str] = None
 
 class StepOut(BaseModel):
     finished: bool
@@ -77,6 +77,7 @@ class StepOut(BaseModel):
 class FlatPage(BaseModel):
     page_number: int
     story: str
+    session_id: Optional[str] = None
     image: Optional[str] = None
     choices_1: Optional[str] = None
     choices_2: Optional[str] = None
@@ -85,7 +86,7 @@ class FlatPage(BaseModel):
 
 # ---------- Helpers ----------
 
-def _flatten_story_page(page_index: int, page: Dict[str, Any], image_url: Optional[str]) -> Dict[str, Any]:
+def _flatten_story_page(session_id: Optional[str], page_index: int, page: Dict[str, Any], image_url: Optional[str]) -> Dict[str, Any]:
     story = (page or {}).get("story", "") or ""
     choices = (page or {}).get("choices", {}) or {}
 
@@ -100,6 +101,7 @@ def _flatten_story_page(page_index: int, page: Dict[str, Any], image_url: Option
         "page_number": int(page_index),
         "story": story,
         "image": image_url,
+        "session_id": session_id,
         "choices_1": pick(1),
         "choices_2": pick(2),
         "choices_3": pick(3),
@@ -129,7 +131,7 @@ def create_session(req: SessionCreateIn):
             "genre": req.genre,
             "ENDING_POINT": req.ending_point,
         })
-        return _flatten_story_page(out["page_index"], out["page"], out.get("image_url"))
+        return _flatten_story_page(out.get("session_id"), out["page_index"], out["page"], out.get("image_url"), )
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
@@ -138,8 +140,8 @@ def create_session(req: SessionCreateIn):
 @app.post("/sessions/{session_id}/choose", response_model=FlatPage)
 def choose(session_id: str, body: ChooseIn):
     try:
-        out = SM.choose(session_id, body.choice_id, body.text)
-        return _flatten_story_page(out["page_index"], out["page"], out.get("image_url"))
+        out = SM.choose(body.choice_id, body.session_id)
+        return _flatten_story_page(session_id, out["page_index"], out["page"], out.get("image_url"))
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:

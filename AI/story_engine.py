@@ -1,10 +1,19 @@
 # story_engine.py
 
 import os, json, torch
-from threading import Thread, Lock
+from threading import RLock
 from typing import Dict, Any, Optional
-from concurrent.futures import ThreadPoolExecutor
 import time
+from AI.utils import (
+    strip_code_block,
+    extract_json_object,
+    sanitize_user_text,
+    ensure_choices,
+    build_recent_context,
+    make_img_sync,   
+    normalize_device,     
+    get_tensor_device       
+)
 
 from AI.model_loader import get_text_model, get_image_pipe
 
@@ -13,8 +22,8 @@ TOK = None
 LLM = None
 PIPE = None
 _INIT_DONE = False
-_INIT_LOCK = Lock()
-IMAGE_LOCK = Lock()
+_INIT_LOCK = RLock()
+IMAGE_LOCK = RLock()
 SESSIONS: Dict[str, Dict[str, Any]] = {}
 _IMAGE_LAZY = True  # --------------------------------------추가
 _TEXT_FIRST = True  # --------------------------------------추가
@@ -26,171 +35,12 @@ os.makedirs(STATIC_ROOT, exist_ok=True)
 TEXT_DEVICE: Optional[str] = None
 IMAGE_DEVICE: Optional[str] = None
 
-
-# ---------- 유틸 ----------
-def strip_code_block(text: str) -> str:
-    if text.startswith("```json"):
-        text = text[len("```json"):].strip()
-    elif text.startswith("```"):
-        text = text[len("```"):].strip()
-    if text.endswith("```"):
-        text = text[:-3].strip()
-    return text
-
-def extract_json_object(text: str) -> str:
-    start = text.find("{")
-    if start == -1:
-        return text
-    count = 0
-    for i in range(start, len(text)):
-        if text[i] == "{": count += 1
-        elif text[i] == "}":
-            count -= 1
-            if count == 0:
-                return text[start : i + 1]
-    return text
-
-def clamp_prompt(p: str, max_words=70):
-    return " ".join((p or "").split()[:max_words])
-
-def sanitize_user_text(t: str, max_len=120):
-    t = (t or "").replace("\n", " ").strip()
-    for bad in ["```", "{", "}", "<<", ">>"]:
-        t = t.replace(bad, "")
-    return t[:max_len]
-
-def ensure_choices(sd, branch_prefix):
-    must = [f"{branch_prefix}-1", f"{branch_prefix}-2",
-            f"{branch_prefix}-3", f"{branch_prefix}-4"]
-    return (
-        isinstance(sd, dict)
-        and isinstance(sd.get("choices"), dict)
-        and all(k in sd["choices"] for k in must)
-    )
-
-def ensure_image_pipe() -> Any:
-    #이미지 파이프라인이 없으면 지금 로드하고, 실행 디바이스도 보정.
-    global PIPE
-    if PIPE is None:
-        with IMAGE_LOCK:
-            if PIPE is None:  # 더블체크
-                print("[Image] Lazy loading SDXL pipeline...")
-                PIPE = get_image_pipe(device=IMAGE_DEVICE or "cpu")
-                try:
-                    _ensure_pipe_device(PIPE, IMAGE_DEVICE or "cpu")
-                except Exception:
-                    pass
-    return PIPE
-
-def generate_and_save_image(pipe, prompt: str, filename: str, seed: Optional[int]=None,
-                            size: str="fast", offload_after=False):
-    # 프리셋
-    if size == "fast":
-        H, W, steps, guidance = 832, 832, 20, 4.0
-    elif size == "balanced":
-        H, W, steps, guidance = 1024, 1024, 28, 5.0
-    else:  # "quality"
-        H, W, steps, guidance = 1152, 1152, 32, 5.5
-        
-    exec_device = IMAGE_DEVICE or "cpu"
-    _ensure_pipe_device(pipe, exec_device)
-
-    gen = None
-    if seed is not None:
-        gen = torch.Generator(device=exec_device).manual_seed(int(seed))
-
-    d = os.path.dirname(filename)
-
-    if d: os.makedirs(d, exist_ok=True)
-    with torch.inference_mode():
-        image = pipe(
-            clamp_prompt(prompt),
-            height=H, width=W,
-            num_inference_steps=steps,
-            guidance_scale=guidance,
-            generator=gen
-        ).images[0]
-    image.save(filename)
-
-    if offload_after:
-        try:
-            pipe.to("cpu"); torch.cuda.empty_cache()
-        except Exception: pass
-    return pipe
-
-
-# def make_img_async(pipe, prompt, path):
-#     try:
-#         with IMAGE_LOCK:
-#             generate_and_save_image(pipe, prompt, path, offload_after=False)
-#         print(f"[이미지 완료: {path}]")
-#     except Exception as e:
-#         print(f"[이미지 생성 실패: {e}]")
-def make_img_async(pipe, prompt, path):
-    try:
-        with IMAGE_LOCK:
-            real_pipe = ensure_image_pipe()  # ← lazy 로드 보장
-            offload = (torch.cuda.device_count() == 1)  # 단일 GPU면 생성 후 내리자
-            generate_and_save_image(real_pipe, prompt, path, offload_after=offload)
-        print(f"[이미지 완료: {path}]")
-    except Exception as e:
-        print(f"[이미지 생성 실패: {e}]")
-
-def _normalize_device(dev: Optional[str]) -> str:
-    """'cuda:0' / 'cpu' 형태로 정규화 + 가드"""
-    if dev is None:
-        return "cpu"
-    dev = str(dev)
-    if dev.startswith("cuda"):
-        if not torch.cuda.is_available():
-            print(f"[Device] CUDA not available → fallback to CPU (requested={dev})")
-            return "cpu"
-        if dev == "cuda":
-            dev = "cuda:0"
-        try:
-            idx = int(dev.split(":")[1])
-        except Exception:
-            idx = 0
-            dev = f"cuda:{idx}"
-        if idx >= torch.cuda.device_count():
-            print(f"[Device] Invalid CUDA index {idx} → fallback to cuda:0")
-            dev = "cuda:0"
-    return dev
-
-def _get_tensor_device(model: torch.nn.Module) -> str:
-    try:
-        return str(next(model.parameters()).device)
-    except StopIteration:
-        return "cpu"
-
-def _ensure_model_device(model: torch.nn.Module, target: str) -> None:
-    cur = _get_tensor_device(model)
-    if cur != target:
-        model.to(target)
-
-def _ensure_pipe_device(pipe, target: str) -> None:
-    """
-    diffusers 파이프라인의 실행 디바이스를 필요할 때만 전환.
-    """
-    try:
-        exec_dev = getattr(pipe, "_execution_device", None)
-        if exec_dev is not None and str(exec_dev) == target:
-            return
-    except Exception:
-        pass
-    pipe.to(target)
-    try:
-        pipe._execution_device = torch.device(target)  # 힌트(가능한 경우)
-    except Exception:
-        pass
-
-
 # ---------- 프롬프트 ----------
 def build_system_prompt(st: Dict[str, Any]) -> str:
     return (
         f"너는 {st['genre']} 장르의 동화를 쓰는 작가야. 이야기는 {st['era']} 시대의 {st['location']}에서 시작되며, "
         f"주인공은 {st['characteristics']} {st['personality']}인 '{st['name']}'이야. "
-        f"각 분기마다 사용자 선택에 따라 3개의 선택지를 제공하고, 마지막 1개는 사용자 입력용 고정 문구로 구성해줘. "
+        f"각 분기마다 사용자 선택에 따라 4개의 선택지를 제공하고, " # 마지막 1개는 사용자 입력용 고정 문구로 구성해줘. 
         f"이야기는 총 {st['ENDING_POINT']}장인 이야기이고 {st['ENDING_POINT']}페이지에 잘 끝나도록 이야기 길이를 조절해줘. "
         f"image_prompt에는 주인공 {st['name']}의 {st['personality']}가 잘 묘사되어야 하고 반드시 image_prompt만 영어로 작성해야 해, "
         f"나머지 텍스트는 한국어로 작성하고, 배경인 {st['location']}, 시대 {st['era']}, 장르 {st['genre']}의 분위기도 잘 표현해야 해. "
@@ -204,104 +54,77 @@ def build_system_prompt(st: Dict[str, Any]) -> str:
         '    "pageN1": "...",\n'
         '    "pageN2": "...",\n'
         '    "pageN3": "...",\n'
-        '    "pageN4": "(당신이 직접 선택지를 입력해 보세요!)"\n'
+        '    "pageN4": "..."\n'
+        # '    "pageN4": "(당신이 직접 선택지를 입력해 보세요!)"\n'
         "  }\n"
         "}\n"
         "항상 순수 JSON만 응답해."
     )
 
 # ---------- 모델/파이프 로딩 ----------
-# def init_models(gpu_text: Optional[int]=0, gpu_image: Optional[int]=1):
-#     global TOK, LLM, PIPE, _INIT_DONE, TEXT_DEVICE, IMAGE_DEVICE
-#     if _INIT_DONE:
-#         print("[Init] Already initialized; skip.")
-#         return
-
-#     # 정규화된 디바이스 문자열 만들기
-#     text_dev = _normalize_device(f"cuda:{gpu_text}" if gpu_text is not None else "cpu")
-#     # 이미지가 None이면 텍스트와 동일 장치
-#     img_dev  = _normalize_device(f"cuda:{gpu_image}" if gpu_image is not None else text_dev)
-
-#     with _INIT_LOCK:
-#         if _INIT_DONE:
-#             return
-#         t0 = time.time()
-
-#         # 병렬 로딩
-#         with ThreadPoolExecutor(max_workers=2) as ex:
-#             fut_txt = ex.submit(get_text_model, device=text_dev)
-#             fut_img = ex.submit(get_image_pipe, device=img_dev)
-#             TOK, LLM = fut_txt.result()
-#             PIPE     = fut_img.result()
-
-#         # 실제 올라간 장치 기록 및 강제 보정
-#         try:
-#             TEXT_DEVICE = _get_tensor_device(LLM)
-#         except Exception:
-#             TEXT_DEVICE = text_dev
-
-#         try:
-#             IMAGE_DEVICE = img_dev
-#             _ensure_pipe_device(PIPE, IMAGE_DEVICE)  # 실행장치 확정
-#         except Exception:
-#             IMAGE_DEVICE = "cpu"
-
-#         _INIT_DONE = True
-#         print(f"[StoryModel] Models ready. text_dev={TEXT_DEVICE}, img_dev={IMAGE_DEVICE} ({time.time()-t0:.1f}s)")
 def init_models(gpu_text: Optional[int]=0, gpu_image: Optional[int]=1):
     global TOK, LLM, PIPE, _INIT_DONE, TEXT_DEVICE, IMAGE_DEVICE
     if _INIT_DONE:
         print("[Init] Already initialized; skip.")
         return
 
-    text_dev = _normalize_device(f"cuda:{gpu_text}" if gpu_text is not None else "cpu")
-    img_dev  = _normalize_device(f"cuda:{gpu_image}" if gpu_image is not None else text_dev)
+    text_dev = normalize_device(f"cuda:{gpu_text}" if gpu_text is not None else "cpu")
+    img_dev  = normalize_device(f"cuda:{gpu_image}" if gpu_image is not None else text_dev)
 
     with _INIT_LOCK:
         if _INIT_DONE:
             return
         t0 = time.time()
 
-        # --- 변경: 텍스트 먼저 로드 ---
+        # 1) 텍스트 먼저 로드
         TOK, LLM = get_text_model(device=text_dev)
 
-        # --- 이미지 파이프라인: lazy면 지금은 로드하지 않음 ---
+        # 2) 실제 올라간 장치 기록 (이 시점에 LLM 존재)
+        try:
+            TEXT_DEVICE = get_tensor_device(LLM)
+        except Exception:
+            TEXT_DEVICE = text_dev
+
+        # 3) 이미지 파이프라인: lazy면 지금은 로드하지 않음
         if _IMAGE_LAZY:
             PIPE = None
         else:
             PIPE = get_image_pipe(device=img_dev)
 
-        # 실제 올라간 장치 기록
-        try:
-            TEXT_DEVICE = _get_tensor_device(LLM)
-        except Exception:
-            TEXT_DEVICE = text_dev
-
-        IMAGE_DEVICE = img_dev  # 원하는 실행 대상 기록 (실 로딩 시 적용)
+        # 4) 이미지 실행 대상 기록 (lazy라도 기록만)
+        IMAGE_DEVICE = img_dev
 
         _INIT_DONE = True
-        print(f"[StoryModel] Models ready. text_dev={TEXT_DEVICE}, "
-              f"img_dev={'(lazy)' if PIPE is None else IMAGE_DEVICE} ({time.time()-t0:.1f}s)")
-
-
-# ---------- 생성 로직 ----------
-def build_recent_context(st, max_chars=800):
-    # 최근 2~3개 story를 뒤에서부터 모아 truncation
-    chunks = []
-    for ch in reversed(st["chapters"][-3:]):
-        s = ((ch.get("ai_story") or {}).get("story") or "").strip()
-        if s:
-            chunks.append(s)
-    ctx = "\n".join(reversed(chunks))[:max_chars]
-    return ctx
+        print(
+            f"[StoryModel] Models ready. text_dev={TEXT_DEVICE}, "
+            f"img_dev={'(lazy)' if PIPE is None else IMAGE_DEVICE} ({time.time()-t0:.1f}s)"
+        )
+# ------------------추가-------------------
+def _run_generate(*, input_ids, attention_mask, max_new_tokens=280,
+                  do_sample=True, temperature=0.9, top_p=0.95,
+                  pad_token_id=None, use_cache=True):
+    model = LLM
+    with torch.inference_mode():
+        return model.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            max_new_tokens=max_new_tokens,
+            do_sample=do_sample,
+            temperature=temperature,
+            top_p=top_p,
+            pad_token_id=pad_token_id,
+            use_cache=use_cache,
+        )
 
 def _generate_branch(st: Dict[str, Any], branch_prefix: str, selected_choice: str = "") -> Dict[str, Any]:
+
     system_prompt = st["system_prompt"]
     ENDING_POINT = st["ENDING_POINT"]
     remaining = int(ENDING_POINT - st["ending_count"])
-    ending_hint = (f"\n(이제 엔딩까지 {remaining} 장 남았습니다. 이야기의 복선 회수와 정리의 단서를 조금씩 드러내세요.)"
-                   if remaining <= max(1, int(ENDING_POINT * 0.33)) else "")
-    recent_ctx = build_recent_context(st)
+    ending_hint = (
+        f"\n(이제 엔딩까지 {remaining} 장 남았습니다. 이야기의 복선 회수와 정리의 단서를 조금씩 드러내세요.)"
+        if remaining <= max(1, int(ENDING_POINT * 0.33)) else ""
+    )
 
     if branch_prefix == "page0":
         user_prompt = (
@@ -320,14 +143,13 @@ def _generate_branch(st: Dict[str, Any], branch_prefix: str, selected_choice: st
             f'    "{branch_prefix}-1": "행동 선택지 1",\n'
             f'    "{branch_prefix}-2": "행동 선택지 2",\n'
             f'    "{branch_prefix}-3": "행동 선택지 3",\n'
-            f'    "{branch_prefix}-4": "(당신이 직접 선택지를 입력해 보세요!)"\n'
+            f'    "{branch_prefix}-4": "행동 선택지 4"\n'
             "  }\n"
             "}\n"
         )
     else:
         recent_ctx = build_recent_context(st)
         safe_choice = sanitize_user_text(selected_choice)
-
         user_prompt = (
             f"[최근 내용 요약]\n{recent_ctx or '(요약 없음)'}\n\n"
             f"[사용자 선택]\n«{safe_choice}»\n"
@@ -344,7 +166,7 @@ def _generate_branch(st: Dict[str, Any], branch_prefix: str, selected_choice: st
             f'    "{branch_prefix}-1": "행동 선택지 1",\n'
             f'    "{branch_prefix}-2": "행동 선택지 2",\n'
             f'    "{branch_prefix}-3": "행동 선택지 3",\n'
-            f'    "{branch_prefix}-4": "(당신이 직접 선택지를 입력해 보세요!)"\n'
+            f'    "{branch_prefix}-4": "행동 선택지 4"\n'
             "  }\n"
             "}\n"
         )
@@ -353,6 +175,7 @@ def _generate_branch(st: Dict[str, Any], branch_prefix: str, selected_choice: st
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
+
     tok, model = TOK, LLM
     prompt_text = tok.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False)
     inputs = tok(prompt_text, return_tensors="pt", return_attention_mask=True)
@@ -363,25 +186,30 @@ def _generate_branch(st: Dict[str, Any], branch_prefix: str, selected_choice: st
         embed_device = next(model.parameters()).device
     inputs = {k: v.to(embed_device) for k, v in inputs.items()}
 
+    # === 모델 실행 ===
     with torch.inference_mode():
         outputs = model.generate(
             input_ids=inputs["input_ids"],
             attention_mask=inputs["attention_mask"],
-            max_new_tokens=400,
-            do_sample=True, temperature=0.9, top_p=0.95,
+            max_new_tokens=280,
+            do_sample=True,
+            temperature=0.9,
+            top_p=0.95,
             pad_token_id=tok.eos_token_id,
             use_cache=True,
         )
 
+    # === 응답 디코딩/파싱 ===
     prompt_len = inputs["input_ids"].shape[1]
     reply = tok.decode(outputs[0][prompt_len:], skip_special_tokens=True).strip()
     cleaned = extract_json_object(strip_code_block(reply))
+
     try:
         story_dict = json.loads(cleaned)
     except json.JSONDecodeError:
         story_dict = {"error": reply}
 
-    # 리페어 1회
+    # === 리페어 1회 시도 ===
     if not ensure_choices(story_dict, branch_prefix):
         repair_msg = (
             "이전 출력이 스키마를 어겼습니다. 오직 JSON만 다시 출력하세요. "
@@ -410,7 +238,7 @@ def _generate_branch(st: Dict[str, Any], branch_prefix: str, selected_choice: st
         except json.JSONDecodeError:
             story_dict = {"error": reply}
 
-    # 기록
+    # === 상태 기록 ===
     st["chapters"].append({
         "path": branch_prefix,
         "user_request": f"{branch_prefix} 분기",
@@ -419,6 +247,7 @@ def _generate_branch(st: Dict[str, Any], branch_prefix: str, selected_choice: st
     })
     st["current_index"] = int(branch_prefix.replace("page", ""))
     st["last_page_path"] = branch_prefix
+
     return story_dict
 
 def _generate_ending(st: Dict[str, Any]) -> Dict[str, Any]:
@@ -456,7 +285,7 @@ def _generate_ending(st: Dict[str, Any]) -> Dict[str, Any]:
     inputs = {k: v.to(embed_device) for k, v in inputs.items()}
 
     with torch.inference_mode():
-        outputs = model.generate(
+        outputs = _run_generate(
             input_ids=inputs["input_ids"],
             attention_mask=inputs["attention_mask"],
             max_new_tokens=600,
@@ -540,18 +369,15 @@ def create_session(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     # page0 생성
     page = _generate_branch(st, "page0", selected_choice="")
-    # 이미지 비동기 생성
     img_dir = os.path.join(STATIC_ROOT, session_id)
     os.makedirs(img_dir, exist_ok=True)
     img_path = os.path.join(img_dir, "page0.png")
     img_url = None
     prompt = (page or {}).get("image_prompt", "")
-    # if isinstance(page, dict) and "error" not in page and prompt:
-    #     img_url = f"/static/{session_id}/page0.png"
-    #     Thread(target=make_img_async, args=(PIPE, prompt, img_path), daemon=True).start()
+
     if isinstance(page, dict) and "error" not in page and prompt:
-        img_url = f"/static/{session_id}/page0.png"
-        Thread(target=make_img_async, args=(None, prompt, img_path), daemon=True).start()
+        if make_img_sync(prompt, img_path, exec_device=IMAGE_DEVICE):          
+            img_url = f"/static/{session_id}/page0.png"  # 응답에 포함
 
     return {
         "session_id": session_id,
@@ -596,24 +422,33 @@ def choose(session_id: str, choice: int, custom_text: Optional[str] = None) -> D
             img_dir = os.path.join(STATIC_ROOT, st["session_id"])
             os.makedirs(img_dir, exist_ok=True)
             img_path = os.path.join(img_dir, f"{branch_prefix}.end.png")
-            img_url = f"/static/{st['session_id']}/{branch_prefix}.end.png"
-            Thread(target=make_img_async, args=(None, prompt, img_path), daemon=True).start()
-        return {"finished": True, "page_index": st["current_index"], "page": end_page, "image_url": img_url}
+            if make_img_sync(prompt, img_path, exec_device=IMAGE_DEVICE):
+                img_url = f"/static/{st['session_id']}/{branch_prefix}.end.png"
+        return {
+            "finished": True,
+            "page_index": st["current_index"],
+            "page": end_page,
+            "image_url": img_url
+        }
 
-    # 다음 분기 생성
+    # (엔딩이 아닐 때)
     page = _generate_branch(st, branch_prefix, selected_choice=selected_text)
 
-    # 이미지
     prompt = (page or {}).get("image_prompt", "")
     img_url = None
     if isinstance(page, dict) and "error" not in page and prompt:
         img_dir = os.path.join(STATIC_ROOT, st["session_id"])
         os.makedirs(img_dir, exist_ok=True)
         img_path = os.path.join(img_dir, f"{branch_prefix}.png")
-        img_url = f"/static/{st['session_id']}/{branch_prefix}.png"
-        Thread(target=make_img_async, args=(None, prompt, img_path), daemon=True).start()
+        if make_img_sync(prompt, img_path, exec_device=IMAGE_DEVICE):
+            img_url = f"/static/{st['session_id']}/{branch_prefix}.png"
 
-    return {"finished": False, "page_index": st["current_index"], "page": page, "image_url": img_url}
+    return {
+        "finished": False,
+        "page_index": st["current_index"],
+        "page": page,
+        "image_url": img_url
+    }
 
 def get_state(session_id: str) -> Dict[str, Any]:
     st = SESSIONS.get(session_id)

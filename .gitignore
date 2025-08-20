@@ -12,9 +12,12 @@ loras/
 
 mgmg/
 
+static/
+
 # 파일 ignore
 test
 dl_AX.py
 dl_Karlo.py
 result
 test_app.py
+freeze.log
