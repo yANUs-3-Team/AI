@@ -9,7 +9,7 @@
 
 ### 1. 동화 줄거리 생성
 - **LLM 기반 스토리 생성**  
-  SKT A.X 계열 모델을 활용하여 사용자 입력(주인공 정보, 시대, 장르, 엔딩 카운트 등)에 맞춘 맞춤형 스토리 생성  
+  SKT 4.0 계열 모델을 활용하여 사용자 입력(주인공 정보, 시대, 장르, 엔딩 카운트 등)에 맞춘 맞춤형 스토리 생성  
 - **프롬프트 엔지니어링**  
   - 프롤로그 생성 → 사용자 선택지 반영 → 다음 플롯 생성 → 엔딩 생성  
   - 각 페이지마다 **4개 선택지** 제공, 사용자 선택 반영  
@@ -38,7 +38,7 @@
 
 | 구분          | 기술 |
 |--------------|------|
-| Text Model   | SKT A.X 계열 LLM (Causal LM) |
+| Text Model   | SKT A.X 4.0 LLM (Causal LM) |
 | Image Model  | Stable Diffusion XL (diffusers) |
 | Fine-tuning  | LoRA 학습 (Web GUI 기반) |
 | Prompting    | 프롬프트 엔지니어링, JSON 구조 응답 |
