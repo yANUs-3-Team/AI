@@ -1,6 +1,6 @@
 # app.py
 # -------------------------------------------------
-import os, logging, warnings, torch
+import os, logging, warnings, torch, json
 
 # ===== 환경변수/로그 억제 (import 전에) =====
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -87,8 +87,30 @@ class FlatPage(BaseModel):
 # ---------- Helpers ----------
 
 def _flatten_story_page(session_id: Optional[str], page_index: int, page: Dict[str, Any], image_url: Optional[str]) -> Dict[str, Any]:
-    story = (page or {}).get("story", "") or ""
-    choices = (page or {}).get("choices", {}) or {}
+    story = ""
+    choices = {}
+    
+    # Check if the page contains an error key with a stringified JSON
+    if page and "error" in page and isinstance(page["error"], str):
+        error_str = page["error"]
+        # Attempt to parse the stringified JSON
+        # It starts with '```json\n' and ends with '```'
+        if error_str.startswith("```json\n") and error_str.endswith("```"):
+            json_content = error_str[len("```json\n"):-len("```")]
+            try:
+                parsed_error_json = json.loads(json_content)
+                story = parsed_error_json.get("story", "")
+                # If there are choices in the error JSON, we can try to extract them
+                # For now, let's assume choices are not in this error format
+            except json.JSONDecodeError:
+                # If parsing fails, treat it as a regular error message
+                story = f"Error parsing story engine output: {error_str}"
+        else:
+            # If it's just an error string, use it as the story
+            story = f"Story engine error: {error_str}"
+    elif page: # If no error, or error is not stringified JSON
+        story = page.get("story", "") or ""
+        choices = page.get("choices", {}) or {}
 
     def pick(i: int) -> Optional[str]:
         # page{N}-i / page{N}i / "i" 어떤 키로 와도 잡아주기
@@ -108,6 +130,8 @@ def _flatten_story_page(session_id: Optional[str], page_index: int, page: Dict[s
         "choices_4": pick(4),
     }
 
+
+
 # ---------- Endpoints ----------
 @app.get("/health")
 def health():
@@ -121,6 +145,7 @@ def health():
 
 @app.post("/sessions", response_model=FlatPage)
 def create_session(req: SessionCreateIn):
+    print(f"[FastAPI] Received /sessions request: {req.model_dump_json(indent=2)}")
     try:
         out = SM.create_session({
             "name": req.name,
@@ -129,22 +154,37 @@ def create_session(req: SessionCreateIn):
             "location": req.location,
             "era": req.era,
             "genre": req.genre,
-            "ENDING_POINT": req.ending_point,
+            "ENDING_POINT": int(req.ending_point),
         })
-        return _flatten_story_page(out.get("session_id"), out["page_index"], out["page"], out.get("image_url"), )
+        print(f"[FastAPI] Story engine output: {out}")
+        flat_page = _flatten_story_page(out.get("session_id"), out["page_index"], out["page"], out.get("image_url"), )
+        print(f"[FastAPI] Sending response: {flat_page}")
+        return flat_page
     except ValueError as ve:
+        print(f"[FastAPI] ValueError: {ve}")
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
+        import traceback
+        print(f"[FastAPI] Exception: {e}")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/sessions/{session_id}/choose", response_model=FlatPage)
 def choose(session_id: str, body: ChooseIn):
+    print(f"[FastAPI] Received /sessions/{session_id}/choose request: {body.model_dump_json(indent=2)}")
     try:
-        out = SM.choose(body.choice_id, body.session_id)
-        return _flatten_story_page(session_id, out["page_index"], out["page"], out.get("image_url"))
+        out = SM.choose(session_id, body.choice_id)
+        print(f"[FastAPI] Story engine output: {out}")
+        flat_page = _flatten_story_page(session_id, out["page_index"], out["page"], out.get("image_url"))
+        print(f"[FastAPI] Sending response: {flat_page}")
+        return flat_page
     except ValueError as ve:
+        print(f"[FastAPI] ValueError: {ve}")
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
+        import traceback
+        print(f"[FastAPI] Exception: {e}")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/sessions/{session_id}/state")
