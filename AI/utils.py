@@ -102,7 +102,7 @@ def ensure_image_pipe(exec_device: Optional[str] = None):
     # 락을 기다리되 5초 넘으면 스택 덤프 후 계속 시도
     if not IMAGE_LOCK.acquire(timeout=5):
         try:
-            from test_story_engine import dump_all_threads
+            from test.test_story_engine import dump_all_threads
             dump_all_threads("LOCK-WAIT ensure_image_pipe")
         except Exception:
             print("[WARN] dump_all_threads not available")

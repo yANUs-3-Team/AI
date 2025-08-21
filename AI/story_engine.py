@@ -191,7 +191,7 @@ def _generate_branch(st: Dict[str, Any], branch_prefix: str, selected_choice: st
         outputs = model.generate(
             input_ids=inputs["input_ids"],
             attention_mask=inputs["attention_mask"],
-            max_new_tokens=280,
+            max_new_tokens=512,
             do_sample=True,
             temperature=0.9,
             top_p=0.95,
@@ -202,12 +202,13 @@ def _generate_branch(st: Dict[str, Any], branch_prefix: str, selected_choice: st
     # === 응답 디코딩/파싱 ===
     prompt_len = inputs["input_ids"].shape[1]
     reply = tok.decode(outputs[0][prompt_len:], skip_special_tokens=True).strip()
-    cleaned = extract_json_object(strip_code_block(reply))
-
+    
+    story_dict = None
     try:
+        cleaned = extract_json_object(strip_code_block(reply))
         story_dict = json.loads(cleaned)
     except json.JSONDecodeError:
-        story_dict = {"error": reply}
+        story_dict = {"error": "json_decode_failed", "raw_reply": reply}
 
     # === 리페어 1회 시도 ===
     if not ensure_choices(story_dict, branch_prefix):
@@ -226,7 +227,7 @@ def _generate_branch(st: Dict[str, Any], branch_prefix: str, selected_choice: st
             outputs = model.generate(
                 input_ids=inputs["input_ids"],
                 attention_mask=inputs["attention_mask"],
-                max_new_tokens=220,
+                max_new_tokens=400,
                 do_sample=False,
                 pad_token_id=tok.eos_token_id,
                 use_cache=True,
