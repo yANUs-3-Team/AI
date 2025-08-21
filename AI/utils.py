@@ -81,20 +81,6 @@ def _ensure_pipe_device(pipe, target: str) -> None:
     except Exception as e:
         print(f"[Device] skip .to due to error: {e}")
 
-
-# def ensure_image_pipe() -> Any:
-#     #이미지 파이프라인이 없으면 지금 로드하고, 실행 디바이스도 보정.
-#     global PIPE
-#     if PIPE is None:
-#         with IMAGE_LOCK:
-#             if PIPE is None:  # 더블체크
-#                 print("[Image] Lazy loading SDXL pipeline...")
-#                 PIPE = get_image_pipe(device=IMAGE_DEVICE or "cpu")
-#                 try:
-#                     _ensure_pipe_device(PIPE, IMAGE_DEVICE or "cpu")
-#                 except Exception:
-#                     pass
-#     return PIPE
 def ensure_image_pipe(exec_device: Optional[str] = None):
     global PIPE
     target = exec_device or "cpu"
@@ -117,41 +103,6 @@ def ensure_image_pipe(exec_device: Optional[str] = None):
     finally:
         IMAGE_LOCK.release()
 
-# def generate_and_save_image(pipe, prompt: str, filename: str, seed: Optional[int]=None,
-#                             size: str="fast", offload_after=False):
-#     # 프리셋
-#     if size == "fast":
-#         H, W, steps, guidance = 832, 832, 20, 4.0
-#     elif size == "balanced":
-#         H, W, steps, guidance = 1024, 1024, 28, 5.0
-#     else:  # "quality"
-#         H, W, steps, guidance = 1152, 1152, 32, 5.5
-        
-#     exec_device = IMAGE_DEVICE or "cpu"
-#     _ensure_pipe_device(pipe, exec_device)
-
-#     gen = None
-#     if seed is not None:
-#         gen = torch.Generator(device=exec_device).manual_seed(int(seed))
-
-#     d = os.path.dirname(filename)
-
-#     if d: os.makedirs(d, exist_ok=True)
-#     with torch.inference_mode():
-#         image = pipe(
-#             clamp_prompt(prompt),
-#             height=H, width=W,
-#             num_inference_steps=steps,
-#             guidance_scale=guidance,
-#             generator=gen
-#         ).images[0]
-#     image.save(filename)
-
-#     if offload_after:
-#         try:
-#             pipe.to("cpu"); torch.cuda.empty_cache()
-#         except Exception: pass
-#     return pipe
 def generate_and_save_image(
     pipe,
     prompt: str,
@@ -197,16 +148,6 @@ def generate_and_save_image(
         except Exception:
             pass
     return pipe
-
-# def make_img_async(pipe, prompt, path):
-#     try:
-#         with IMAGE_LOCK:
-#             real_pipe = ensure_image_pipe()  # ← lazy 로드 보장
-#             offload = (torch.cuda.device_count() == 1)  # 단일 GPU면 생성 후 내리자
-#             generate_and_save_image(real_pipe, prompt, path, offload_after=offload)
-#         print(f"[이미지 완료: {path}]")
-#     except Exception as e:
-#         print(f"[이미지 생성 실패: {e}]")
 
 def make_img_sync(prompt: str, path: str, exec_device: Optional[str] = None) -> bool:
     try:

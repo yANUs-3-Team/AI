@@ -3,21 +3,23 @@
 
 # 라이브러리 ignore
 __pycache__/
-
+# 로컬 모델 파이프라인
 cache/
-
+# 스테이블 디퓨전 로컬 모델
 stable-diffusion-xl-base-1.0/
-
+# SDXL LoRa 학습 safetensors 
 loras/
-
+# 가상환경
 mgmg/
-
+# sessionID와 생성된 이미지
 static/
 
 # 파일 ignore
+# 테스트용 파일
 test
+# LLM 모델 파이프 라인 다운로드
 dl_AX.py
+# 테스트용 이미지 생성 AI 모델 다운로드
 dl_Karlo.py
-result
-test_app.py
+# 테스트용 파일 실행 결과
 freeze.log

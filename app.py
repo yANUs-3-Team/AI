@@ -16,7 +16,8 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from fastapi.staticfiles import StaticFiles
 import uvicorn
-# 내부 스토리 엔진 의존성
+
+# 내부 스토리 엔진
 import AI.story_engine as SM
 from AI.story_engine import generate_title
 
@@ -169,7 +170,7 @@ def choose(session_id: str, body: ChooseIn):
 def get_state(session_id: str):
     try:
         st = SM.get_state(session_id)
-        # SM.get_state 결과를 그대로 반환(프론트 변환 없음)
+        # SM.get_state 결과를 그대로 반환
         return st
     except Exception:
         raise HTTPException(status_code=404, detail="session not found")

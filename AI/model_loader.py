@@ -110,7 +110,7 @@ def get_image_pipe(base_model: str = "./stable-diffusion-xl-base-1.0", device: O
 try: torch.cuda.empty_cache()
 except: pass
 
-# (선택) 시드 있는 제너레이터 헬퍼
+# 시드 있는 제너레이터 헬퍼
 def make_generator(seed: int | None = None) -> torch.Generator | None:
     if seed is None:
         return None
