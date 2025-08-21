@@ -1,150 +1,209 @@
-# 🌟 몽글몽글 상상나래 (MGMG-AI)
+# MGMG: AI 기반 스토리 및 이미지 생성 엔진
 
-본 프로젝트의 AI 파트는 **동화 줄거리 생성 모델**과 **동화 삽화 생성 모델**을 포함하며,  
-사용자 설정값을 기반으로 **프롬프트 엔지니어링**을 거쳐 스토리와 이미지를 순차적으로 생성·저장하는 시스템입니다.
+## 프로젝트 개요
 
----
+MGMG는 사용자가 정의한 매개변수를 기반으로 동적인 스토리를 생성하고, 각 장면에 맞는 이미지를 함께 생성하는 AI 기반 애플리케이션입니다. FastAPI를 통해 API 형태로 기능을 제공하며, 텍스트 생성 모델과 이미지 생성 모델을 활용하여 풍부한 사용자 경험을 제공합니다.
 
-## ✨ 주요 기능
+## 주요 기능
 
-### 1. 동화 줄거리 생성
-- **LLM 기반 스토리 생성**  
-  SKT 4.0 계열 모델을 활용하여 사용자 입력(주인공 정보, 시대, 장르, 엔딩 카운트 등)에 맞춘 맞춤형 스토리 생성  
-- **프롬프트 엔지니어링**  
-  - 프롤로그 생성 → 사용자 선택지 반영 → 다음 플롯 생성 → 엔딩 생성  
-  - 각 페이지마다 **4개 선택지** 제공, 사용자 선택 반영  
-- **JSON 기반 구조**  
-  - `story`, `choices`, `path` 필드로 구성된 JSON 응답 반환  
-  - 시스템에서 스토리 진행 및 엔딩 여부 판별 가능
+*   **맞춤형 스토리 생성:** 주인공의 특성, 배경(시대, 장소), 장르 등을 설정하여 독창적인 스토리를 시작합니다.
+*   **분기형 스토리 전개:** 사용자 선택에 따라 스토리가 다양한 방향으로 전개되며, 몰입감 있는 경험을 제공합니다.
+*   **장면별 이미지 생성:** 스토리의 주요 장면에 어울리는 이미지를 자동으로 생성하여 시각적인 요소를 더합니다.
+*   **스토리 제목 생성:** 완료된 스토리에 대한 적절한 제목을 AI가 생성합니다.
+*   **FastAPI 기반 API:** RESTful API를 통해 다른 애플리케이션과의 연동 및 확장이 용이합니다.
 
-### 2. 동화 삽화 생성
-- **Stable Diffusion XL 기반 이미지 생성**  
-  - LoRA(저장된 스타일/캐릭터) 적용을 통한 일관된 그림체 유지  
-  - 플롯별 스토리와 장면 정보를 바탕으로 이미지 프롬프트 생성  
-- **멀티 LoRA 지원**  
-  - 예: `illu`(동화풍 스타일), `fantasy`(배경/분위기 강화) 동시 적용  
-- **Web GUI 및 diffusers API 지원**
+## 설정 및 실행
 
-### 3. AI 파이프라인
-1. **사용자 입력 수집** → 이름, 성격, 시대, 장르, 엔딩 카운트  
-2. **스토리 생성 요청** → 프롬프트 엔지니어링 적용, JSON 응답 반환  
-3. **이미지 생성 요청** → 스토리 내용을 기반으로 장면 삽화 생성  
-4. **DB 저장** → 생성된 텍스트/이미지 URL 저장  
-5. **반복 진행** → 엔딩 카운트 도달 시 스토리 종료
+### 1. 환경 설정
 
----
-
-## 🛠️ 기술 스택
-
-| 구분          | 기술 |
-|--------------|------|
-| Text Model   | SKT A.X 4.0 LLM (Causal LM) |
-| Image Model  | Stable Diffusion XL (diffusers) |
-| Fine-tuning  | LoRA 학습 (Web GUI 기반) |
-| Prompting    | 프롬프트 엔지니어링, JSON 구조 응답 |
-| Framework    | PyTorch, diffusers, FastAPI |
-| Language     | Python 3.10+ |
-
----
-
-## 📂 프로젝트 구조
-
-```
-AI/
-├── app.py               # FastAPI 서버 엔트리포인트
-├── model_loader.py      # 텍스트/이미지 모델 로드 및 초기화
-├── story_engine.py      # 스토리 생성, 프롬프트 엔지니어링 로직
-├── requirements.txt     # Python 패키지 의존성
-├── static/              # 생성된 이미지 저장 폴더
-└── utils/               # 유틸 함수 (JSON 처리, 프롬프트 포맷팅 등)
-```
-
----
-
-## 🚀 시작하기
-
-### 1. 사전 준비
-- Python 3.10 이상
-- NVIDIA GPU + CUDA 11.8 이상 (이미지 생성 시 권장)
-- 가상환경 생성 및 활성화
+Python 3.9 이상 버전이 필요합니다. 가상 환경 사용을 권장합니다.
 
 ```bash
-python -m venv venv
-source venv/bin/activate  # Mac/Linux
-venv\Scripts\activate     # Windows
+# 가상 환경 생성 (mgmg는 가상 환경 이름)
+python -m venv mgmg
+
+# 가상 환경 활성화
+# Windows
+.\mgmg\Scripts\activate
+# Linux/macOS
+source mgmg/bin/activate
 ```
 
-### 2. 의존성 설치
+### 2. 종속성 설치
+
+프로젝트 루트 디렉토리에서 `requirements.txt`에 명시된 모든 종속성을 설치합니다.
+
 ```bash
 pip install -r requirements.txt
 ```
-PyTorch는 CUDA 버전에 맞춰 별도 설치 필요:
+
+**GPU 사용을 위한 PyTorch 설치 (선택 사항):**
+만약 NVIDIA GPU를 사용하여 모델을 가속화하려면, CUDA 버전에 맞는 PyTorch를 설치해야 합니다. 예를 들어, CUDA 11.8을 사용하는 경우:
+
 ```bash
-# CUDA 12.1 예시
-pip install --index-url https://download.pytorch.org/whl/cu121 torch torchvision torchaudio
-
-# CPU-only
-pip install torch torchvision torchaudio
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 ```
+자신의 CUDA 버전에 맞는 설치 명령은 [PyTorch 공식 웹사이트](https://pytorch.org/get-started/locally/)에서 확인할 수 있습니다.
 
-### 3. 환경 변수 설정
-`AI/.env` 파일 생성 (Git 추적 제외)
+### 3. 모델 준비
 
-```env
-# 텍스트 모델 캐시 경로
-TEXT_MODEL_PATH=cache/AX
+프로젝트는 `stable-diffusion-xl-base-1.0`과 같은 사전 훈련된 모델을 사용합니다. 필요한 모델 파일들이 `stable-diffusion-xl-base-1.0/` 디렉토리 내에 올바르게 위치하는지 확인하십시오. 모델 로딩은 애플리케이션 시작 시 자동으로 처리됩니다.
 
-# 이미지 모델 캐시 경로
-IMAGE_MODEL_PATH=stable-diffusion-xl-base-1.0
+### 4. 애플리케이션 실행
 
-# LoRA 경로
-LORA_PATH_1=loras/StorybookRedmondV2-KidsBook-KidsRedmAF.safetensors
-LORA_PATH_2=loras/J_oil_pastels_XL.safetensors
-```
+프로젝트 루트 디렉토리에서 다음 명령어를 사용하여 FastAPI 서버를 시작합니다.
 
-### 4. 서버 실행
 ```bash
-uvicorn app:app --reload
-```
-서버 실행 후 `http://localhost:8000`에서 API 호출 가능
-
----
-
-## 📡 API 명세
-
-### `POST /init`
-동화의 프롤로그 또는 다음 페이지를 생성합니다.
-
-**Request Body**
-```json
-{
-  "name": "주인공",
-  "personality": "성격",
-  "era": "시대",
-  "genre": "장르",
-  "ending_count": 3,
-  "current_path": "page0"
-}
+python app.py
 ```
 
-**Response Example**
-```json
-{
-  "path": "page1",
-  "story": "주인공은...",
-  "choices": {
-    "page1-1": "선택지1",
-    "page1-2": "선택지2",
-    "page1-3": "선택지3",
-    "page1-4": "(직접 입력)"
-  }
-}
+서버가 성공적으로 시작되면, 기본적으로 `http://0.0.0.0:8000`에서 API를 사용할 수 있습니다.
+
+## 프로젝트 구조
+
+```
+.
+├── app.py                  # 메인 FastAPI 애플리케이션
+├── requirements.txt        # Python 종속성 목록
+├── AI/                     # AI 핵심 로직 및 유틸리티
+│   ├── __init__.py
+│   ├── model_loader.py     # AI 모델 로딩 관련 로직
+│   ├── story_engine.py     # 스토리 생성 및 관리 핵심 로직
+│   └── utils.py            # 공통 유틸리티 함수
+├── static/                 # 생성된 이미지 파일 저장 디렉토리
+├── cache/                  # 모델 캐싱 디렉토리
+├── stable-diffusion-xl-base-1.0/ # 사전 훈련된 Stable Diffusion 모델 파일
+├── loras/                  # LoRA 모델 저장 디렉토리 (선택 사항)
+├── result/                 # 결과물 저장 디렉토리 (선택 사항)
+├── test/                   # 테스트 관련 파일
+│   └── test_story_engine.py # 스토리 엔진 테스트 스크립트
+└── .gitignore              # Git 버전 관리 제외 파일
 ```
 
----
+## API 명세서
 
-## 🔒 보안 및 성능 고려사항
-- **모델 캐시**: 모델 로드 시 로컬 캐시 사용으로 API 응답속도 최적화
-- **입력 값 검증**: 잘못된 형식의 프롬프트 방지
-- **GPU 메모리 관리**: LoRA 적용 시 메모리 최적화 옵션 사용 (`torch_dtype=torch.float16`)
-- **리퀘스트 큐잉**: 동시 다중 요청 시 큐 기반 처리로 안정성 확보
+### 기본 정보
+
+*   **Base URL:** `http://0.0.0.0:8000` (기본값, 환경 변수 `HOST` 및 `PORT`로 변경 가능)
+*   **API 버전:** 1.0.0
+*   **인증:** 필요 없음
+
+### 엔드포인트
+
+#### 1. 상태 확인 (Health Check)
+
+*   **GET** `/health`
+*   **설명:** API 서버의 상태 및 모델 로딩 여부를 확인합니다.
+*   **응답:**
+    *   `200 OK`
+    ```json
+    {
+      "ok": true,
+      "cuda": true,       // CUDA 사용 가능 여부
+      "gpus": 2,          // 감지된 GPU 수
+      "models_ready": true // 모델 로딩 완료 여부
+    }
+    ```
+
+#### 2. 새 스토리 세션 생성
+
+*   **POST** `/sessions`
+*   **설명:** 새로운 스토리 세션을 생성하고, 초기 스토리 페이지를 반환합니다.
+*   **요청 본문 (`application/json`):**
+    *   `SessionCreateIn` 스키마
+    ```json
+    {
+      "name": "string",         // 주인공 이름
+      "personality": "string",  // 주인공 성격
+      "characteristics": "string", // 주인공 특징
+      "location": "string",     // 스토리 배경 장소
+      "era": "string",          // 스토리 배경 시대
+      "genre": "string",        // 스토리 장르
+      "ending_point": 1         // 스토리의 총 장 수 (1 이상)
+    }
+    ```
+*   **응답:**
+    *   `200 OK`
+    *   `FlatPage` 스키마 (초기 스토리 페이지 정보)
+    ```json
+    {
+      "page_number": 0,
+      "story": "string",        // 생성된 스토리 내용
+      "session_id": "string",   // 생성된 세션 ID
+      "image": "string or null",// 생성된 이미지 URL (없을 수 있음)
+      "choices_1": "string or null", // 선택지 1
+      "choices_2": "string or null", // 선택지 2
+      "choices_3": "string or null", // 선택지 3
+      "choices_4": "string or null"  // 선택지 4
+    }
+    ```
+    *   `400 Bad Request`: 요청 본문이 유효하지 않은 경우
+    *   `500 Internal Server Error`: 서버 내부 오류
+
+#### 3. 스토리 선택 진행
+
+*   **POST** `/sessions/{session_id}/choose`
+*   **설명:** 주어진 세션 ID에 대해 사용자의 선택에 따라 스토리를 다음 단계로 진행합니다.
+*   **경로 매개변수:**
+    *   `session_id`: `string` (스토리 세션 ID)
+*   **요청 본문 (`application/json`):**
+    *   `ChooseIn` 스키마
+    ```json
+    {
+      "choice_id": "string" // 사용자가 선택한 선택지의 ID (예: "1", "2", "3", "4")
+                            // 또는 사용자 정의 선택지 텍스트 (choice_id가 "4"일 경우)
+    }
+    ```
+*   **응답:**
+    *   `200 OK`
+    *   `FlatPage` 스키마 (다음 스토리 페이지 정보)
+    ```json
+    {
+      "finished": false,        // 스토리가 완료되었는지 여부
+      "page_index": 1,          // 현재 페이지 인덱스
+      "page": {},               // 스토리 내용 및 관련 데이터 (딕셔너리)
+      "image_url": "string or null" // 생성된 이미지 URL (없을 수 있음)
+    }
+    ```
+    *   `400 Bad Request`: 요청 본문이 유효하지 않거나, `choice_id`가 유효하지 않은 경우
+    *   `404 Not Found`: `session_id`가 유효하지 않은 경우
+    *   `500 Internal Server Error`: 서버 내부 오류
+
+#### 4. 세션 상태 조회
+
+*   **GET** `/sessions/{session_id}/state`
+*   **설명:** 특정 스토리 세션의 현재 상태를 조회합니다.
+*   **경로 매개변수:**
+    *   `session_id`: `string` (스토리 세션 ID)
+*   **응답:**
+    *   `200 OK`
+    ```json
+    {
+      "session_id": "string",
+      "current_index": 0,     // 현재 스토리 페이지 인덱스
+      "ending_count": 0,      // 엔딩까지 남은 카운트
+      "ENDING_POINT": 2,      // 총 엔딩 포인트
+      "finished": false,      // 스토리가 완료되었는지 여부
+      "last_page_path": "string or null", // 마지막 페이지 경로
+      "chapters_len": 1       // 현재까지 생성된 챕터 수
+    }
+    ```
+    *   `404 Not Found`: `session_id`가 유효하지 않은 경우
+
+#### 5. 스토리 제목 생성 요청
+
+*   **POST** `/sessions/{session_id}/title`
+*   **설명:** 완료된 스토리에 대한 제목 생성을 요청합니다. 스토리가 완료되지 않은 경우 오류를 반환합니다.
+*   **경로 매개변수:**
+    *   `session_id`: `string` (스토리 세션 ID)
+*   **요청 본문:** 없음
+*   **응답:**
+    *   `200 OK`
+    ```json
+    {
+      "title": "string" // 생성된 스토리 제목
+    }
+    ```
+    *   `400 Bad Request`: `session_id`가 제공되지 않은 경우
+    *   `404 Not Found`: `session_id`가 유효하지 않거나 스토리가 완료되지 않은 경우
+    *   `500 Internal Server Error`: 서버 내부 오류

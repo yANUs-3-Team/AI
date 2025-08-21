@@ -1,6 +1,6 @@
 # app.py
 # -------------------------------------------------
-import os, logging, warnings, torch, json
+import os, logging, warnings, torch
 
 # ===== 환경변수/로그 억제 (import 전에) =====
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 # 내부 스토리 엔진 의존성
 import AI.story_engine as SM
+from AI.story_engine import generate_title
 
 warnings.filterwarnings("ignore", message=".*dtype=torch.float16.*cpu.*")
 for name in ("diffusers", "transformers", "peft"):
@@ -87,30 +88,8 @@ class FlatPage(BaseModel):
 # ---------- Helpers ----------
 
 def _flatten_story_page(session_id: Optional[str], page_index: int, page: Dict[str, Any], image_url: Optional[str]) -> Dict[str, Any]:
-    story = ""
-    choices = {}
-    
-    # Check if the page contains an error key with a stringified JSON
-    if page and "error" in page and isinstance(page["error"], str):
-        error_str = page["error"]
-        # Attempt to parse the stringified JSON
-        # It starts with '```json\n' and ends with '```'
-        if error_str.startswith("```json\n") and error_str.endswith("```"):
-            json_content = error_str[len("```json\n"):-len("```")]
-            try:
-                parsed_error_json = json.loads(json_content)
-                story = parsed_error_json.get("story", "")
-                # If there are choices in the error JSON, we can try to extract them
-                # For now, let's assume choices are not in this error format
-            except json.JSONDecodeError:
-                # If parsing fails, treat it as a regular error message
-                story = f"Error parsing story engine output: {error_str}"
-        else:
-            # If it's just an error string, use it as the story
-            story = f"Story engine error: {error_str}"
-    elif page: # If no error, or error is not stringified JSON
-        story = page.get("story", "") or ""
-        choices = page.get("choices", {}) or {}
+    story = (page or {}).get("story", "") or ""
+    choices = (page or {}).get("choices", {}) or {}
 
     def pick(i: int) -> Optional[str]:
         # page{N}-i / page{N}i / "i" 어떤 키로 와도 잡아주기
@@ -129,8 +108,6 @@ def _flatten_story_page(session_id: Optional[str], page_index: int, page: Dict[s
         "choices_3": pick(3),
         "choices_4": pick(4),
     }
-
-
 
 # ---------- Endpoints ----------
 @app.get("/health")
@@ -154,10 +131,10 @@ def create_session(req: SessionCreateIn):
             "location": req.location,
             "era": req.era,
             "genre": req.genre,
-            "ENDING_POINT": int(req.ending_point),
+            "ENDING_POINT": req.ending_point,
         })
         print(f"[FastAPI] Story engine output: {out}")
-        flat_page = _flatten_story_page(out.get("session_id"), out["page_index"], out["page"], out.get("image_url"), )
+        flat_page = _flatten_story_page(out.get("session_id"), out["page_index"], out["page"], out.get("image_url"))
         print(f"[FastAPI] Sending response: {flat_page}")
         return flat_page
     except ValueError as ve:
@@ -173,8 +150,9 @@ def create_session(req: SessionCreateIn):
 def choose(session_id: str, body: ChooseIn):
     print(f"[FastAPI] Received /sessions/{session_id}/choose request: {body.model_dump_json(indent=2)}")
     try:
-        out = SM.choose(session_id, body.choice_id)
+        out = SM.choose(session_id, int(body.choice_id))
         print(f"[FastAPI] Story engine output: {out}")
+        st = SM.get_state(session_id)
         flat_page = _flatten_story_page(session_id, out["page_index"], out["page"], out.get("image_url"))
         print(f"[FastAPI] Sending response: {flat_page}")
         return flat_page
@@ -197,6 +175,26 @@ def get_state(session_id: str):
         raise HTTPException(status_code=404, detail="session not found")
     
 app.mount("/static", StaticFiles(directory=SM.STATIC_ROOT), name="static")
+
+@app.post("/sessions/{session_id}/title")
+def request_title(session_id: str):
+    if not session_id:
+        raise HTTPException(status_code=400, detail="Session ID is required")
+    
+    try:
+        # Story Engine의 제목 생성 함수 호출
+        title = generate_title(session_id)
+        return {"title": title}
+    except ValueError as e:
+        # 세션이 없거나, 이야기가 끝나지 않은 경우 등
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        # 기타 예상치 못한 오류
+        import traceback
+        print(f"[Error] Title generation failed for {session_id}: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Failed to generate title due to an internal error")
+    
 # ---------- Entrypoint ----------
 if __name__ == "__main__":
     print("[ENTRY] test_app __main__ reached")

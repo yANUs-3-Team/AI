@@ -94,7 +94,7 @@ def get_image_pipe(base_model: str = "./stable-diffusion-xl-base-1.0", device: O
 
     _safe_load_lora(pipe, "loras/StorybookRedmondV2-KidsBook-KidsRedmAF.safetensors", "illu")
     _safe_load_lora(pipe, "loras/J_oil_pastels_XL.safetensors", "fantasy")
-    try: pipe.set_adapters(["illu", "fantasy"], adapter_weights=[0.1, 0.8])
+    try: pipe.set_adapters(["illu", "fantasy"], adapter_weights=[0.5, 0.5])
     except: pass
     try: pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config, use_karras=True)
     except: pass

@@ -44,6 +44,7 @@ def build_system_prompt(st: Dict[str, Any]) -> str:
         f"이야기는 총 {st['ENDING_POINT']}장인 이야기이고 {st['ENDING_POINT']}페이지에 잘 끝나도록 이야기 길이를 조절해줘. "
         f"image_prompt에는 주인공 {st['name']}의 {st['personality']}가 잘 묘사되어야 하고 반드시 image_prompt만 영어로 작성해야 해, "
         f"나머지 텍스트는 한국어로 작성하고, 배경인 {st['location']}, 시대 {st['era']}, 장르 {st['genre']}의 분위기도 잘 표현해야 해. "
+        "story는 200글자로 이내로 작성해줘야하고, '마침표(.)'뒤에는 '\n'를 포함시켜서 줄바꿈 시켜줘"
         "형식은 다음 JSON 스키마를 따라야 해:\n"
         "{\n"
         '  "story": "...",\n'
@@ -131,6 +132,7 @@ def _generate_branch(st: Dict[str, Any], branch_prefix: str, selected_choice: st
             f"'{st['characteristics']}하고 {st['personality']}'인 "
             f"'{st['name']}'이 어떻게 이 모험을 시작하게 되었는지 중심으로 "
             f'"{branch_prefix}"(프롤로그)를 작성해줘. '
+            "story는 200글자로 이내로 작성해줘야하고, '마침표(.)'뒤에는 '\n'를 포함시켜서 줄바꿈 시켜줘"
             "image_prompt만 반드시 영어로 작성해. "
             "응답은 반드시 순수 JSON 형식으로만 작성하고, 주석/설명/마크다운은 절대 금지. "
             "아래 형식을 정확히 지켜줘:\n"
@@ -154,6 +156,7 @@ def _generate_branch(st: Dict[str, Any], branch_prefix: str, selected_choice: st
             f"[최근 내용 요약]\n{recent_ctx or '(요약 없음)'}\n\n"
             f"[사용자 선택]\n«{safe_choice}»\n"
             f"[작성 지시]\n\"{branch_prefix}\" 다음 장면을 이어서 서술해줘.{ending_hint} "
+            "story는 200글자로 이내로 작성해줘야하고, '마침표(.)'뒤에는 '\n'를 포함시켜서 줄바꿈 시켜줘"
             "image_prompt는 반드시 영어로 작성해. "
             "응답은 반드시 순수 JSON 형식으로만 작성하고, 주석/설명/마크다운은 절대 금지. "
             "아래 형식을 지켜줘:\n"
@@ -262,6 +265,7 @@ def _generate_ending(st: Dict[str, Any]) -> Dict[str, Any]:
         f"지금까지의 이야기 흐름 요약:\n\"{summary}\"\n\n"
         f"이제 '{name}'의 모험을 마무리하는 엔딩 장면을 작성해줘. "
         "감정적 여운이 남도록 서술적이며 명확한 결말로 완결짓고, 선택지는 포함하지 마. "
+        "story는 200글자로 이내로 작성해줘야하고, '마침표(.)'뒤에는 '\n'를 포함시켜서 줄바꿈 시켜줘"
         "출력은 오직 JSON. 마크다운/설명 금지.\n"
         "{\n"
         '  "story": "<엔딩 내용(한국어)>",\n'
@@ -298,8 +302,7 @@ def _generate_ending(st: Dict[str, Any]) -> Dict[str, Any]:
     cleaned = extract_json_object(strip_code_block(reply))
     try:
         story_dict = json.loads(cleaned)
-    except json.JSONDecodeError:
-        
+    except json.JSONDecodeError:    
         repair_msg = (
             "앞선 출력이 형식을 어겼습니다. 오직 JSON만 다시 출력하세요. "
             '형식: {"story":"...","image_prompt":"...","scene_tags":["..."],'
@@ -330,6 +333,12 @@ def _generate_ending(st: Dict[str, Any]) -> Dict[str, Any]:
 
     end_path = f"page{st['current_index']}.end"
     story_dict["is_ending"] = True
+
+    # 전체 이야기 구성
+    ending_story = story_dict.get("story", "")
+    total_story_content = summary + "\n\n" + ending_story
+    story_dict["total_story"] = total_story_content
+
     st["chapters"].append({
         "path": end_path,
         "user_request": "엔딩",
@@ -339,6 +348,63 @@ def _generate_ending(st: Dict[str, Any]) -> Dict[str, Any]:
     st["finished"] = True
     st["last_page_path"] = end_path
     return story_dict
+
+def generate_title(session_id: str) -> str:
+    st = SESSIONS.get(session_id)
+    if not st:
+        raise ValueError("Invalid session_id")
+    if not st.get("finished"):
+        raise ValueError("Story is not finished yet")
+
+    # 마지막 챕터의 ai_story에서 total_story를 가져옵니다.
+    try:
+        total_story = st["chapters"][-1]["ai_story"]["total_story"]
+    except (KeyError, IndexError):
+        return "제목을 생성할 수 없습니다: 전체 이야기를 찾지 못했습니다."
+
+    # LLM에 제목 생성을 요청하는 프롬프트
+    title_prompt = (
+        f"다음은 '{st['genre']}' 장르의 '{st['era']} 시대에 살았던 '주인공이 '{st['name']}'동화입니다. "
+        "이 이야기의 내용을 기반으로 어린 아이들이 좋아할 멋진 제목을 딱 하나만 추천해 주세요. "
+        "오직 제목만 응답하고, 다른 설명이나 따옴표는 붙이지 마세요.\n\n"
+        f"--- 이야기 내용 ---\n{total_story}"
+    )
+
+    msgs = [
+        # 시스템 역할 없이 사용자의 직접적인 요청으로 구성
+        {"role": "user", "content": title_prompt},
+    ]
+
+    tok, model = TOK, LLM
+    prompt_text = tok.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False)
+    inputs = tok(prompt_text, return_tensors="pt", return_attention_mask=True)
+
+    try:
+        embed_device = model.model.embed_tokens.weight.device
+    except Exception:
+        embed_device = next(model.parameters()).device
+    inputs = {k: v.to(embed_device) for k, v in inputs.items()}
+
+    # === 모델 실행 ===
+    with torch.inference_mode():
+        outputs = model.generate(
+            input_ids=inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+            max_new_tokens=50,  # 제목은 길지 않으므로 토큰 수를 줄입니다.
+            do_sample=True,
+            temperature=0.8,
+            pad_token_id=tok.eos_token_id,
+        )
+
+    # === 응답 디코딩 및 정리 ===
+    prompt_len = inputs["input_ids"].shape[1]
+    title = tok.decode(outputs[0][prompt_len:], skip_special_tokens=True).strip()
+    
+    # 불필요한 따옴표나 "제목:" 같은 접두사 제거
+    title = title.replace('"', '').replace("'", "").removeprefix("제목:").strip()
+
+    return title
+
 
 
 # ---------- 외부로 노출할 API ----------
