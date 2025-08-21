@@ -16,10 +16,8 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from fastapi.staticfiles import StaticFiles
 import uvicorn
-
-# 내부 스토리 엔진
+# 내부 스토리 엔진 의존성
 import AI.story_engine as SM
-from AI.story_engine import generate_title
 
 warnings.filterwarnings("ignore", message=".*dtype=torch.float16.*cpu.*")
 for name in ("diffusers", "transformers", "peft"):
@@ -123,7 +121,6 @@ def health():
 
 @app.post("/sessions", response_model=FlatPage)
 def create_session(req: SessionCreateIn):
-    print(f"[FastAPI] Received /sessions request: {req.model_dump_json(indent=2)}")
     try:
         out = SM.create_session({
             "name": req.name,
@@ -134,68 +131,32 @@ def create_session(req: SessionCreateIn):
             "genre": req.genre,
             "ENDING_POINT": req.ending_point,
         })
-        print(f"[FastAPI] Story engine output: {out}")
-        flat_page = _flatten_story_page(out.get("session_id"), out["page_index"], out["page"], out.get("image_url"))
-        print(f"[FastAPI] Sending response: {flat_page}")
-        return flat_page
+        return _flatten_story_page(out.get("session_id"), out["page_index"], out["page"], out.get("image_url"), )
     except ValueError as ve:
-        print(f"[FastAPI] ValueError: {ve}")
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
-        import traceback
-        print(f"[FastAPI] Exception: {e}")
-        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/sessions/{session_id}/choose", response_model=FlatPage)
 def choose(session_id: str, body: ChooseIn):
-    print(f"[FastAPI] Received /sessions/{session_id}/choose request: {body.model_dump_json(indent=2)}")
     try:
-        out = SM.choose(session_id, int(body.choice_id))
-        print(f"[FastAPI] Story engine output: {out}")
-        st = SM.get_state(session_id)
-        flat_page = _flatten_story_page(session_id, out["page_index"], out["page"], out.get("image_url"))
-        print(f"[FastAPI] Sending response: {flat_page}")
-        return flat_page
+        out = SM.choose(body.choice_id, body.session_id)
+        return _flatten_story_page(session_id, out["page_index"], out["page"], out.get("image_url"))
     except ValueError as ve:
-        print(f"[FastAPI] ValueError: {ve}")
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
-        import traceback
-        print(f"[FastAPI] Exception: {e}")
-        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/sessions/{session_id}/state")
 def get_state(session_id: str):
     try:
         st = SM.get_state(session_id)
-        # SM.get_state 결과를 그대로 반환
+        # SM.get_state 결과를 그대로 반환(프론트 변환 없음)
         return st
     except Exception:
         raise HTTPException(status_code=404, detail="session not found")
     
 app.mount("/static", StaticFiles(directory=SM.STATIC_ROOT), name="static")
-
-@app.post("/sessions/{session_id}/title")
-def request_title(session_id: str):
-    if not session_id:
-        raise HTTPException(status_code=400, detail="Session ID is required")
-    
-    try:
-        # Story Engine의 제목 생성 함수 호출
-        title = generate_title(session_id)
-        return {"title": title}
-    except ValueError as e:
-        # 세션이 없거나, 이야기가 끝나지 않은 경우 등
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        # 기타 예상치 못한 오류
-        import traceback
-        print(f"[Error] Title generation failed for {session_id}: {e}")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail="Failed to generate title due to an internal error")
-    
 # ---------- Entrypoint ----------
 if __name__ == "__main__":
     print("[ENTRY] test_app __main__ reached")

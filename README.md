@@ -66,7 +66,7 @@ python app.py
 ├── app.py                  # 메인 FastAPI 애플리케이션
 ├── requirements.txt        # Python 종속성 목록
 ├── AI/                     # AI 핵심 로직 및 유틸리티
-│   ├── __init__.py
+│   ├── __init__.py         # AI 파일 모듈화
 │   ├── model_loader.py     # AI 모델 로딩 관련 로직
 │   ├── story_engine.py     # 스토리 생성 및 관리 핵심 로직
 │   └── utils.py            # 공통 유틸리티 함수
@@ -74,9 +74,7 @@ python app.py
 ├── cache/                  # 모델 캐싱 디렉토리
 ├── stable-diffusion-xl-base-1.0/ # 사전 훈련된 Stable Diffusion 모델 파일
 ├── loras/                  # LoRA 모델 저장 디렉토리 (선택 사항)
-├── result/                 # 결과물 저장 디렉토리 (선택 사항)
 ├── test/                   # 테스트 관련 파일
-│   └── test_story_engine.py # 스토리 엔진 테스트 스크립트
 └── .gitignore              # Git 버전 관리 제외 파일
 ```
 
